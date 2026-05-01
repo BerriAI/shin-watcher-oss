@@ -1,44 +1,45 @@
 #!/usr/bin/env tsx
 /**
- * Run shin-watcher exactly once against either:
- *   - a specific issue:   tsx scripts/once.ts --issue 9876
- *   - the next eligible:  tsx scripts/once.ts
+ * Start the shin-watcher chat UI at http://localhost:3333.
+ * Optionally run one issue immediately:
+ *   tsx scripts/once.ts            → open chat, idle until you invoke via UI
+ *   tsx scripts/once.ts --issue 9876 → auto-start that issue then stay alive
+ *   tsx scripts/once.ts --next       → auto-start next eligible then stay alive
  *
- * Use this for first-runs and debugging — bypasses cron, runs in foreground,
- * exits with code 0 on success and 1 on failure.
+ * The server stays alive after the run so you can invoke more runs from the chat.
+ * Ctrl-C to quit.
  */
 import { Runner } from "../src/runner.js";
+import { startDashboard } from "../src/dashboard/server.js";
 
-function parseIssueArg(): number | undefined {
-  const idx = process.argv.indexOf("--issue");
-  if (idx === -1) return undefined;
-  const raw = process.argv[idx + 1];
-  if (!raw) {
-    console.error("Usage: tsx scripts/once.ts [--issue <number>]");
-    process.exit(2);
+function parseArgs(): { issueNumber?: number; runNext?: boolean } {
+  const args = process.argv.slice(2);
+  if (args.includes("--next")) return { runNext: true };
+  const idx = args.indexOf("--issue");
+  if (idx !== -1) {
+    const n = parseInt(args[idx + 1] ?? "", 10);
+    if (!isNaN(n)) return { issueNumber: n };
   }
-  const n = Number.parseInt(raw, 10);
-  if (Number.isNaN(n)) {
-    console.error(`--issue must be an integer, got: ${raw}`);
-    process.exit(2);
-  }
-  return n;
+  return {};
 }
 
 async function main(): Promise<void> {
-  const issueNumber = parseIssueArg();
+  const { issueNumber, runNext } = parseArgs();
   const runner = new Runner();
-  try {
-    const summary = await runner.runOne(issueNumber);
-    if (!summary) {
-      console.log("[once] no eligible issue (everything in cooldown?)");
-      process.exit(0);
-    }
-    console.log(JSON.stringify(summary, null, 2));
-    process.exit(summary.errorMessage ? 1 : 0);
-  } finally {
-    runner.close();
+  startDashboard(runner, 3333);
+
+  // If invoked with --issue or --next, kick off immediately; then stay alive.
+  if (issueNumber !== undefined || runNext) {
+    const summary = await runner.runOne(issueNumber).catch((e) => {
+      console.error("[once] run error:", e);
+      return null;
+    });
+    if (summary) console.log("[once] done:", JSON.stringify(summary));
   }
+
+  // Keep the server alive indefinitely so the chat UI stays reachable.
+  console.log("  Waiting for commands via http://localhost:3333  (Ctrl-C to quit)\n");
+  process.stdin.resume();
 }
 
 main().catch((e) => {

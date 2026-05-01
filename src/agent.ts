@@ -1,5 +1,70 @@
 import fs from "node:fs";
 import path from "node:path";
+
+// ── ANSI colour helpers ────────────────────────────────────────────────────
+const C = {
+  reset: "\x1b[0m",
+  bold: "\x1b[1m",
+  dim: "\x1b[2m",
+  cyan: "\x1b[36m",
+  yellow: "\x1b[33m",
+  green: "\x1b[32m",
+  magenta: "\x1b[35m",
+  red: "\x1b[31m",
+  blue: "\x1b[34m",
+  gray: "\x1b[90m",
+};
+const ts = () => new Date().toLocaleTimeString("en-US", { hour12: false });
+
+function prettyPrintEvent(event: AgentEvent): void {
+  const type = (event as { type?: string }).type ?? "unknown";
+  switch (type) {
+    case "assistant_message": {
+      const ev = event as { type: string; content: Array<{ type: string; text?: string; thinking?: string }> };
+      for (const block of ev.content ?? []) {
+        if (block.type === "thinking" && block.thinking) {
+          process.stdout.write(
+            `${C.gray}${ts()} [think] ${block.thinking.slice(0, 300).replace(/\n/g, " ")}${block.thinking.length > 300 ? "…" : ""}${C.reset}\n`
+          );
+        } else if (block.type === "text" && block.text) {
+          process.stdout.write(
+            `${C.cyan}${ts()} [agent] ${C.bold}${block.text.slice(0, 600)}${block.text.length > 600 ? "…" : ""}${C.reset}\n`
+          );
+        }
+      }
+      break;
+    }
+    case "tool_call": {
+      const ev = event as { type: string; name: string; input: unknown };
+      const inputStr = JSON.stringify(ev.input ?? {}).slice(0, 200);
+      process.stdout.write(
+        `${C.yellow}${ts()} [tool→] ${C.bold}${ev.name}${C.reset}${C.yellow}  ${inputStr}${C.reset}\n`
+      );
+      break;
+    }
+    case "tool_result": {
+      const ev = event as { type: string; name: string; content: unknown; isError?: boolean };
+      const resultStr = JSON.stringify(ev.content ?? "").slice(0, 300);
+      const colour = ev.isError ? C.red : C.green;
+      process.stdout.write(
+        `${colour}${ts()} [tool←] ${C.bold}${ev.name}${C.reset}${colour}  ${resultStr}${C.reset}\n`
+      );
+      break;
+    }
+    case "error": {
+      const ev = event as { type: string; error?: unknown };
+      process.stdout.write(
+        `${C.red}${ts()} [ERROR] ${String(ev.error)}${C.reset}\n`
+      );
+      break;
+    }
+    case "end":
+      process.stdout.write(`${C.magenta}${ts()} [agent] run finished${C.reset}\n`);
+      break;
+    default:
+      break;
+  }
+}
 import {
   Agent,
   type AgentEvent,
@@ -160,13 +225,14 @@ export async function createAgent(opts: CreateAgentOptions): Promise<AgentBundle
     sessionId: opts.taskId,
   });
 
-  // 5. Stream every event to the transcript log for postmortem inspection.
+  // 5. Stream every event to the transcript log AND pretty-print to stdout.
   agent.subscribe(async (event: AgentEvent) => {
     try {
       transcriptStream.write(JSON.stringify({ ts: Date.now(), ...event }) + "\n");
     } catch {
       /* swallow */
     }
+    prettyPrintEvent(event);
   });
 
   return {

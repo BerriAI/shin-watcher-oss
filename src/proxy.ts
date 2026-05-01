@@ -37,11 +37,13 @@ export function prepareWorkdir(opts: PrepareOptions): string {
     });
   }
 
-  // Hard reset to the latest origin/<ref>. Throws on failure.
-  execFileSync("git", ["fetch", "origin", ref, "--depth", "50"], {
-    cwd: target,
-    stdio: "inherit",
-  });
+  // Fetch latest commits. The explicit refspec writes the remote-tracking ref
+  // even on a shallow clone where "fetch origin main" only writes FETCH_HEAD.
+  execFileSync(
+    "git",
+    ["fetch", "origin", `+refs/heads/${ref}:refs/remotes/origin/${ref}`, "--depth", "50"],
+    { cwd: target, stdio: "inherit" }
+  );
   execFileSync("git", ["reset", "--hard", `origin/${ref}`], {
     cwd: target,
     stdio: "inherit",

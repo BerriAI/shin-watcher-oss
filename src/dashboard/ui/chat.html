@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>shin-watcher</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0d0d0f;
+      --surface: #18191e;
+      --border: #2a2b32;
+      --text: #e2e4ec;
+      --muted: #6b6e7e;
+      --cyan: #38bdf8;
+      --yellow: #fbbf24;
+      --green: #34d399;
+      --red: #f87171;
+      --purple: #c084fc;
+      --gray: #52525b;
+      --accent: #6366f1;
+      --user-bg: rgba(99,102,241,0.12);
+      --mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--sans); }
+
+    /* ── Layout ── */
+    .shell { display: flex; flex-direction: column; height: 100vh; max-width: 800px; margin: 0 auto; }
+
+    /* ── Header ── */
+    header {
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 10px;
+    }
+    .logo { width: 24px; height: 24px; background: var(--accent); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; color: #fff; flex-shrink: 0; }
+    header h1 { font-size: 15px; font-weight: 600; flex: 1; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--gray); flex-shrink: 0; transition: background 0.3s; }
+    .status-dot.running { background: var(--green); animation: pulse 1.4s ease-in-out infinite; }
+    @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.7)} }
+    .status-label { font-size: 12px; color: var(--muted); }
+
+    /* ── Chat messages ── */
+    .messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 4px; }
+    .msg { display: flex; gap: 10px; padding: 4px 0; }
+    .msg-role { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; flex-shrink: 0; width: 52px; padding-top: 3px; text-align: right; }
+    .msg-body { flex: 1; font-size: 13px; line-height: 1.6; word-break: break-word; }
+
+    /* role colours */
+    .msg.think .msg-role { color: var(--gray); }
+    .msg.think .msg-body { color: var(--gray); font-style: italic; }
+    .msg.agent .msg-role { color: var(--cyan); }
+    .msg.agent .msg-body { color: var(--text); }
+    .msg.tool .msg-role { color: var(--yellow); }
+    .msg.tool .msg-body { color: var(--yellow); font-family: var(--mono); font-size: 12px; }
+    .msg.result .msg-role { color: var(--green); }
+    .msg.result .msg-body { color: var(--muted); font-family: var(--mono); font-size: 12px; }
+    .msg.error-msg .msg-role { color: var(--red); }
+    .msg.error-msg .msg-body { color: var(--red); font-family: var(--mono); font-size: 12px; }
+    .msg.you .msg-role { color: var(--purple); }
+    .msg.you .msg-body { color: var(--text); background: var(--user-bg); border-radius: 8px; padding: 6px 10px; margin-left: -10px; }
+    .msg.sys .msg-role { color: var(--muted); }
+    .msg.sys .msg-body { color: var(--muted); font-size: 12px; font-style: italic; }
+
+    /* inline code */
+    .msg-body code { font-family: var(--mono); font-size: 11px; background: rgba(255,255,255,0.06); border: 1px solid var(--border); padding: 1px 4px; border-radius: 3px; }
+
+    /* tool name badge */
+    .tool-name { background: rgba(251,191,36,0.12); border: 1px solid rgba(251,191,36,0.25); border-radius: 4px; padding: 1px 6px; font-size: 11px; margin-right: 6px; }
+
+    /* screenshots */
+    .msg-img { max-width: 100%; border-radius: 8px; border: 1px solid var(--border); cursor: zoom-in; margin-top: 4px; display: block; }
+
+    /* ── Input bar ── */
+    .input-bar {
+      padding: 14px 20px;
+      border-top: 1px solid var(--border);
+      display: flex; gap: 10px; align-items: flex-end;
+    }
+    textarea {
+      flex: 1; background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 10px 14px; font-size: 14px; color: var(--text);
+      font-family: var(--sans); resize: none; outline: none;
+      line-height: 1.5; min-height: 44px; max-height: 140px;
+    }
+    textarea:focus { border-color: var(--accent); }
+    textarea::placeholder { color: var(--muted); }
+    .btn { border: none; border-radius: 8px; padding: 10px 16px; font-size: 13px; font-weight: 600; cursor: pointer; transition: opacity 0.15s; white-space: nowrap; }
+    .btn-send { background: var(--accent); color: #fff; }
+    .btn-send:disabled { opacity: 0.35; cursor: not-allowed; }
+    .btn-stop { background: rgba(248,113,113,0.15); color: var(--red); border: 1px solid rgba(248,113,113,0.3); display: none; }
+    .btn-stop.visible { display: block; }
+
+    /* ── Scrollbar ── */
+    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    /* ── Lightbox ── */
+    .lb { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.88); z-index: 99; align-items: center; justify-content: center; cursor: zoom-out; }
+    .lb.open { display: flex; }
+    .lb img { max-width: 90vw; max-height: 90vh; border-radius: 8px; }
+  </style>
+</head>
+<body>
+<div class="shell">
+  <header>
+    <div class="logo">S</div>
+    <h1>shin-watcher</h1>
+    <span class="status-dot" id="dot"></span>
+    <span class="status-label" id="status-label">idle</span>
+  </header>
+
+  <div id="active-banner" style="display:none;padding:8px 20px;background:rgba(99,102,241,0.1);border-bottom:1px solid rgba(99,102,241,0.25);font-size:12px;color:#a5b4fc;"></div>
+
+  <div class="messages" id="messages"></div>
+
+  <div class="input-bar">
+    <button class="btn btn-stop" id="btn-stop">■ Stop</button>
+    <textarea
+      id="input"
+      rows="1"
+      placeholder="run #12345  •  run next  •  paste a GitHub issue URL  •  or chat with the running agent"
+    ></textarea>
+    <button class="btn btn-send" id="btn-send">Send</button>
+  </div>
+</div>
+
+<div class="lb" id="lb"><img id="lb-img" src="" /></div>
+
+<script>
+// ── state ─────────────────────────────────────────────────────────────────
+let busy = false;
+let es = null;
+
+// ── dom ───────────────────────────────────────────────────────────────────
+const msgs    = document.getElementById('messages');
+const input   = document.getElementById('input');
+const btnSend = document.getElementById('btn-send');
+const btnStop = document.getElementById('btn-stop');
+const dot     = document.getElementById('dot');
+const lbl     = document.getElementById('status-label');
+const lb      = document.getElementById('lb');
+const lbImg   = document.getElementById('lb-img');
+const banner  = document.getElementById('active-banner');
+
+// ── helpers ───────────────────────────────────────────────────────────────
+const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const trunc = (s, n) => s.length > n ? s.slice(0, n) + '…' : s;
+
+function addMsg(cls, role, bodyHtml) {
+  const d = document.createElement('div');
+  d.className = `msg ${cls}`;
+  d.innerHTML = `<span class="msg-role">${role}</span><span class="msg-body">${bodyHtml}</span>`;
+  msgs.appendChild(d);
+  msgs.scrollTop = msgs.scrollHeight;
+  return d;
+}
+
+function setStatus(running, label, issueUrl, issueTitle) {
+  busy = running;
+  dot.className = 'status-dot' + (running ? ' running' : '');
+  lbl.textContent = label;
+  btnStop.className = 'btn btn-stop' + (running ? ' visible' : '');
+  if (running && issueTitle) {
+    banner.style.display = 'block';
+    banner.innerHTML = `<span style="margin-right:6px">▶</span>Running: <a href="${esc(issueUrl||'')}" target="_blank" style="color:#a5b4fc">${esc(issueTitle)}</a> — type anything to steer`;
+  } else {
+    banner.style.display = 'none';
+  }
+}
+
+// ── SSE ───────────────────────────────────────────────────────────────────
+function connectSSE() {
+  if (es) { es.close(); es = null; }
+  es = new EventSource('/live');
+
+  es.onmessage = e => {
+    const ev = JSON.parse(e.data);
+    handleEvent(ev);
+  };
+  es.onerror = () => {
+    // retry automatically via browser's built-in SSE reconnect
+  };
+}
+
+function handleEvent(ev) {
+  const type = ev.type;
+
+  if (type === 'connected') return;
+
+  if (type === 'run_start') {
+    setStatus(true, `#${ev.issueNumber} running…`, ev.issueUrl, ev.issueTitle);
+    addMsg('sys', 'sys', `▶ <a href="${esc(ev.issueUrl)}" target="_blank">#${ev.issueNumber}</a> — ${esc(ev.issueTitle)}`);
+    return;
+  }
+
+  if (type === 'run_end') {
+    setStatus(false, 'idle');
+    addMsg('sys', 'sys', '■ Run finished');
+    return;
+  }
+
+  // assistant streaming: show thinking deltas + text deltas
+  if (type === 'message_update') {
+    const ae = ev.assistantMessageEvent;
+    if (!ae) return;
+    if (ae.type === 'thinking_delta' && ae.delta) {
+      appendOrCreate('think', '·think·', esc(ae.delta));
+    } else if (ae.type === 'text_delta' && ae.delta) {
+      appendOrCreate('agent', 'agent', esc(ae.delta));
+    }
+    return;
+  }
+
+  // tool calls
+  if (type === 'tool_execution_start') {
+    if (ev.toolName === '__steer__') {
+      addMsg('you', 'you', esc(ev.args?.message ?? ''));
+      return;
+    }
+    const args = trunc(JSON.stringify(ev.args ?? {}), 300);
+    addMsg('tool', 'tool', `<span class="tool-name">${esc(ev.toolName)}</span>${esc(args)}`);
+    return;
+  }
+
+  if (type === 'tool_execution_end') {
+    const result = trunc(JSON.stringify(ev.result ?? ''), 400);
+    const cls = ev.isError ? 'error-msg' : 'result';
+    const role = ev.isError ? 'error' : 'result';
+    addMsg(cls, role, `<span class="tool-name">${esc(ev.toolName)}</span>${esc(result)}`);
+    return;
+  }
+
+  if (type === 'agent_start') { addMsg('sys', 'sys', '▶ agent started'); return; }
+  if (type === 'agent_end')   { addMsg('sys', 'sys', '■ agent ended');   return; }
+}
+
+// For streaming deltas: append to last message of same class instead of creating a new one each time
+let lastStreamCls = null;
+let lastStreamEl = null;
+function appendOrCreate(cls, role, html) {
+  if (lastStreamCls === cls && lastStreamEl) {
+    lastStreamEl.querySelector('.msg-body').innerHTML += html;
+  } else {
+    lastStreamEl = addMsg(cls, role, html);
+    lastStreamCls = cls;
+  }
+  msgs.scrollTop = msgs.scrollHeight;
+}
+// reset stream accumulator on any non-streaming event
+const origHandleEvent = handleEvent;
+
+// ── send ──────────────────────────────────────────────────────────────────
+async function send() {
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  input.style.height = 'auto';
+  lastStreamCls = null; lastStreamEl = null;
+
+  // Always echo the user's message immediately
+  addMsg('you', 'you', esc(text));
+
+  // Is it an invoke command (run / GitHub URL / bare number)?
+  const isRunCmd = /^run\b|github\.com.*\/issues\/\d+|^\d+$|^#\d+/.test(text.trim());
+
+  if (isRunCmd) {
+    const r = await fetch('/api/invoke', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: text }),
+    }).then(r => r.json()).catch(e => ({ error: e.message }));
+
+    if (r.error) {
+      addMsg('sys', 'sys', esc(r.error));
+    } else if (r.queued === false) {
+      addMsg('sys', 'sys', esc(r.message));
+    } else {
+      addMsg('sys', 'sys', `Queued${r.issueNumber ? ' #' + r.issueNumber : ''}… waiting for agent to start`);
+    }
+    // run_start SSE event will update status dot when agent picks it up
+  } else {
+    // Steer or chat with the running agent
+    const r = await fetch('/api/steer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text }),
+    }).then(r => r.json()).catch(e => ({ error: e.message }));
+
+    if (r.error) {
+      addMsg('sys', 'sys',
+        r.error === 'No active run to steer.'
+          ? 'No run active — try: run next'
+          : esc(r.error));
+    }
+    // on success the SSE __steer__ echo confirms delivery
+  }
+}
+
+// ── stop ──────────────────────────────────────────────────────────────────
+btnStop.addEventListener('click', async () => {
+  const r = await fetch('/api/interrupt', { method: 'POST' }).then(r => r.json()).catch(() => ({}));
+  if (r.ok) addMsg('sys', 'sys', 'Interrupting agent…');
+  else addMsg('sys', 'sys', r.message || 'Nothing to interrupt.');
+});
+
+// ── input events ─────────────────────────────────────────────────────────
+btnSend.addEventListener('click', send);
+input.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+});
+input.addEventListener('input', () => {
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 140) + 'px';
+});
+
+// ── lightbox ─────────────────────────────────────────────────────────────
+msgs.addEventListener('click', e => {
+  if (e.target.classList.contains('msg-img')) { lbImg.src = e.target.src; lb.classList.add('open'); }
+});
+lb.addEventListener('click', () => lb.classList.remove('open'));
+
+// ── init ──────────────────────────────────────────────────────────────────
+(async () => {
+  connectSSE();
+
+  // Check if a run is already in progress
+  const status = await fetch('/api/status').then(r => r.json()).catch(() => ({}));
+  if (status.busy && status.active?.length > 0) {
+    const run = status.active[0];
+    setStatus(true, `#${run.issueNumber} running…`, run.issueUrl, run.issueTitle);
+    addMsg('sys', 'sys', `Already running: <a href="${esc(run.issueUrl)}" target="_blank">#${run.issueNumber}</a> — ${esc(run.issueTitle)}`);
+  }
+
+  // Load last 5 past runs as context
+  const history = await fetch('/api/history').then(r => r.json()).catch(() => []);
+  if (history.length > 0) {
+    const verdicts = ['None','Failed','Partial','Similar','Repro','Validated'];
+    addMsg('sys', 'sys', `Last ${Math.min(history.length,5)} run(s):`);
+    for (const r of history.slice(0,5)) {
+      const v = verdicts[r.verdict] ?? r.verdict;
+      addMsg('sys', 'sys', `  #${r.issue_number} · ${v} · ${r.difficulty ?? ''} · ${((r.duration_ms||0)/1000).toFixed(0)}s${r.pr_url ? ' · <a href="'+esc(r.pr_url)+'" target="_blank">PR ↗</a>' : ''}`);
+    }
+  }
+
+  input.focus();
+})();
+</script>
+</body>
+</html>

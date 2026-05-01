@@ -12,6 +12,7 @@ import {
 import { ensureBotRemote, ensureFork } from "./github.js";
 import { summarizeRun, type RunSummary } from "./report.js";
 import type { ReportPayload } from "./tools/writeReport.js";
+import { LiveBus } from "./dashboard/live.js";
 
 /**
  * Runner: owns scheduling-adjacent concerns.
@@ -128,6 +129,10 @@ export class Runner {
         canOpenPrToday: () => this.canOpenAnotherPrToday(),
       });
 
+      // Register with LiveBus so the dashboard can stream events in real-time.
+      LiveBus.startRun(taskId, issue, bundle.agent);
+      bundle.agent.subscribe((event) => LiveBus.pushEvent(taskId, event));
+
       const userPrompt = buildReproUserPrompt(issue);
       const promptDone = bundle.agent.prompt(userPrompt);
 
@@ -153,6 +158,7 @@ export class Runner {
       console.error(`[runner] error: ${errorMessage}`);
     } finally {
       clearTimeout(timeoutHandle);
+      LiveBus.endRun(taskId);
       try {
         await proxy?.stop();
       } catch {

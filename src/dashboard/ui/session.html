@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Session — shin-watcher</title>
+  <link rel="stylesheet" href="/ui/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+<div class="layout">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="header">
+      <div class="logo">S</div>
+      <a href="/" style="color:var(--text);font-size:15px;font-weight:600;text-decoration:none">← shin-watcher</a>
+    </div>
+    <div class="sessions-header">
+      <span>Sessions</span>
+      <span id="session-count" style="color:var(--muted);font-size:11px">—</span>
+    </div>
+    <div class="sessions-list" id="sessions-list">
+      <div style="padding:20px 16px;color:var(--muted);font-size:12px">Loading…</div>
+    </div>
+    <div class="invoke-area">
+      <div class="invoke-label">Run another issue</div>
+      <form class="invoke-form" id="invoke-form">
+        <input class="invoke-input" id="invoke-input" type="text" placeholder="run #12345 | run next" autocomplete="off" spellcheck="false" />
+        <button class="btn" type="submit" id="invoke-btn">Run</button>
+      </form>
+      <div class="invoke-msg" id="invoke-msg"></div>
+    </div>
+  </aside>
+
+  <!-- Main: session detail -->
+  <main class="main session-view">
+    <div class="session-toolbar">
+      <span class="issue-link" id="issue-link">Loading session…</span>
+      <div class="badges" id="toolbar-badges"></div>
+    </div>
+
+    <div class="session-panels">
+      <!-- Transcript feed -->
+      <div class="transcript-panel">
+        <div class="transcript-feed" id="transcript-feed"></div>
+        <!-- Steer -->
+        <div class="steer-area" id="steer-area">
+          <div class="steer-label">
+            <span class="pulse-dot" id="steer-dot" style="display:none"></span>
+            <span id="steer-label-text">Steer the agent</span>
+          </div>
+          <form class="steer-form" id="steer-form">
+            <textarea
+              class="steer-input"
+              id="steer-input"
+              placeholder="Send a message to the agent mid-run…"
+              rows="1"
+              disabled
+            ></textarea>
+            <button class="btn" type="submit" id="steer-btn" disabled>Send</button>
+          </form>
+        </div>
+      </div>
+
+      <!-- Report panel -->
+      <div class="report-panel">
+        <h2>Report</h2>
+        <div id="report-content" class="report-placeholder">Report will appear here when the run finishes.</div>
+        <div id="screenshot-strip" class="screenshot-strip" style="display:none"></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- Lightbox -->
+<div class="lightbox" id="lightbox">
+  <button class="lightbox-close" id="lightbox-close">✕</button>
+  <img id="lightbox-img" src="" alt="" />
+</div>
+
+<script src="/ui/app.js"></script>
+</body>
+</html>

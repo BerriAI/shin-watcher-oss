@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>shin-watcher</title>
+  <link rel="stylesheet" href="/ui/style.css" />
+</head>
+<body>
+<div class="layout">
+  <!-- Sidebar: sessions list + invoke bar -->
+  <aside class="sidebar">
+    <div class="header">
+      <div class="logo">S</div>
+      <h1>shin-watcher</h1>
+      <span class="tag">litellm</span>
+    </div>
+
+    <div class="sessions-header">
+      <span>Sessions</span>
+      <span id="session-count" style="color:var(--muted);font-size:11px">—</span>
+    </div>
+    <div class="sessions-list" id="sessions-list">
+      <div style="padding:20px 16px;color:var(--muted);font-size:12px">Loading…</div>
+    </div>
+
+    <!-- Invoke chat bar -->
+    <div class="invoke-area">
+      <div class="invoke-label">Run an issue</div>
+      <form class="invoke-form" id="invoke-form">
+        <input
+          class="invoke-input"
+          id="invoke-input"
+          type="text"
+          placeholder="run #12345  |  run next  |  run #12345 fix"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <button class="btn" type="submit" id="invoke-btn">Run</button>
+      </form>
+      <div class="invoke-msg" id="invoke-msg"></div>
+    </div>
+  </aside>
+
+  <!-- Main: session view or empty state -->
+  <main class="main" id="main-area">
+    <div class="main-empty">
+      <div class="icon">🔍</div>
+      <p>Select a session or invoke a new run</p>
+      <p style="font-size:12px;color:var(--muted)">Active runs appear with a pulsing dot</p>
+    </div>
+  </main>
+</div>
+
+<!-- Lightbox -->
+<div class="lightbox" id="lightbox">
+  <button class="lightbox-close" id="lightbox-close">✕</button>
+  <img id="lightbox-img" src="" alt="" />
+</div>
+
+<script src="/ui/app.js"></script>
+</body>
+</html>
