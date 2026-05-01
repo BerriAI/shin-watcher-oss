@@ -13,7 +13,7 @@ interface BuildReproPromptOptions {
   reportPath: string;
   /** Stable id used as a screenshot filename prefix and session id. */
   taskId: string;
-  /** Whether the agent should also attempt Phase 2 (fix) inline if it concludes easy/medium. */
+  /** Whether the agent should also attempt Phase 2 (fix → push → PR → comment) inline. */
   fixEnabled: boolean;
 }
 
@@ -34,13 +34,49 @@ DIFFICULTY RUBRIC (you MUST self-classify):
   hard   — anything else (migrations, breaking changes, large refactors, security-sensitive)
 `.trim();
 
+const TOOL_INVENTORY = `
+TOOL INVENTORY:
+
+Native (always present):
+  shell                 — run any shell command (git, uv, curl, ls, cat, pytest, …) inside the working dir
+  curl                  — HTTP requests (localhost only) against the running proxy
+  stitch_gif            — assemble a sequence of PNGs into an animated GIF (Phase 2 demo)
+  write_report          — MANDATORY FINAL TOOL. Call exactly once with the full structured report.
+
+Browser (Playwright MCP — Microsoft):
+  browser_snapshot      — Returns the page's accessibility tree as YAML, with stable refs.
+                          ALWAYS take a snapshot BEFORE clicking, so you can target by ref.
+  browser_navigate      — Navigate to a URL.
+  browser_click         — Click by ref from the latest snapshot. Prefer this over CSS selectors.
+  browser_type          — Type into a focused input.
+  browser_take_screenshot — Save a viewport screenshot under the run's screenshot dir.
+                            Use BEFORE_* prefixes for repro evidence and AFTER_* for fix-verification evidence.
+  browser_evaluate      — Run JS in the page context. Use sparingly.
+  browser_console_messages, browser_network_requests — page diagnostics
+  browser_handle_dialog — accept/dismiss native dialogs
+
+GitHub (GitHub MCP — Anthropic reference server):
+  github_get_issue, github_list_issue_comments — read context (you already have the issue body, but
+                          there may be later comments worth checking)
+  github_search_code    — find code in BerriAI/litellm without grep
+  github_fork_repository — no-op if the bot fork already exists
+  github_create_branch  — create a branch on the bot fork
+  github_push_files, github_create_or_update_file — push your fix to the bot fork
+  github_create_pull_request — open a DRAFT PR upstream (BerriAI/litellm:main ← <bot>:<branch>)
+  github_add_issue_comment — post the final report-comment on the issue
+
+Note: A git remote called \`shin-bot\` is already configured in the working tree, pointing at your
+fork with embedded credentials. You can use \`shell\` with \`git push shin-bot <branch>\` as an
+alternative to github_push_files for code changes.
+`.trim();
+
 export function buildReproSystemPrompt(opts: BuildReproPromptOptions): string {
   const planRepro = readSkill("plan_repro.md");
   const implementSkill = opts.fixEnabled ? readSkill("implement.md") : null;
 
   return [
-    "You are shin-watcher, an autonomous bug-reproduction agent for the BerriAI/litellm project.",
-    "You are running unattended on a host machine with the litellm repository cloned and a litellm proxy already running.",
+    "You are shin-watcher, an autonomous bug-reproduction (and optionally bug-fix) agent for BerriAI/litellm.",
+    "You run unattended on a host machine with the litellm repository cloned and a litellm proxy already running.",
     "",
     "ENVIRONMENT (already prepared for you):",
     `- Working directory (litellm clone): ${opts.workdir}`,
@@ -50,54 +86,71 @@ export function buildReproSystemPrompt(opts: BuildReproPromptOptions): string {
     `- Screenshot dir:                    ${opts.screenshotDir}`,
     `- Task id:                           ${opts.taskId}`,
     `- Report path (write_report tool):   ${opts.reportPath}`,
+    `- Bot GitHub username:               ${config.github.botUsername}`,
+    `- Target repo:                       ${config.github.targetOwner}/${config.github.targetRepo}`,
+    `- Bot fork:                          ${config.github.botUsername}/${config.github.targetRepo}`,
     "",
-    "TOOLS:",
-    "- shell             — run any shell command (git, uv, curl, ls, cat, pytest…) in the working dir",
-    "- curl              — HTTP requests (localhost only) against the running proxy",
-    "- browser_navigate, browser_click, browser_fill, browser_screenshot, browser_eval — Playwright Chromium",
-    "- list_screenshots, stitch_gif — inventory + GIF assembly",
-    "- write_report      — MANDATORY FINAL TOOL. Call exactly once with the full structured report.",
+    TOOL_INVENTORY,
     "",
-    "MISSION (Phase 1 — REPRODUCE):",
-    "1. Read the issue carefully. If something is unclear, write down your assumed answer in `notes`",
-    "   and proceed — do NOT ask the human (you are running unattended).",
-    "2. Reproduce the bug by combining curl against the proxy and Playwright against the admin UI.",
-    "   Take BEFORE_* screenshots that clearly show the symptom.",
-    "3. Investigate the code with shell+grep to find the exact file:line of the bug. Cite the broken code verbatim.",
-    "4. Self-classify the difficulty using the rubric below.",
+    "MISSION (Phase 1 — REPRODUCE) — always run:",
+    "1. Read the issue. If anything is unclear, write your assumed answer in `notes` and proceed —",
+    "   you are running unattended, do NOT ask the human.",
+    "2. Reproduce the bug using curl + Playwright MCP. ALWAYS call browser_snapshot before clicking",
+    "   so your clicks target stable refs, not selectors.",
+    "3. Take BEFORE_* screenshots that clearly show the symptom (browser_take_screenshot).",
+    "4. Use shell + ripgrep (rg) to locate the bug in the code. Cite file:line and the exact broken line.",
+    "5. Self-classify difficulty using the rubric below.",
+    "",
     opts.fixEnabled
       ? [
+          "MISSION (Phase 2 — FIX) — gated:",
+          "Run Phase 2 ONLY IF verdict is ≥ 3 AND difficulty is easy or medium.",
+          "If difficulty is hard, write the report with a plan only and stop. Do NOT push code.",
           "",
-          "MISSION (Phase 2 — FIX, gated):",
-          "If your verdict is ≥ 3 AND difficulty is easy or medium, ALSO attempt the fix inline:",
-          "5. Apply the patch in the working tree (use shell + standard tools).",
-          "6. Restart the proxy: `pkill -f 'litellm --config' || true; sleep 2; <restart command>` then re-run /health/readiness.",
-          "7. Re-run the EXACT same repro flow against the patched proxy. Take AFTER_* screenshots.",
-          "8. Use `stitch_gif` to assemble BEFORE_* + AFTER_* into a demo GIF.",
-          "9. Set `fix_applied: true` in the report. The runner handles git push + draft PR.",
-          "If difficulty is hard, do NOT attempt the fix — write the report with a plan only and stop.",
-          "If validation after the patch fails (curl still 500, screenshot still wrong), set `fix_applied: false`",
-          "and explain in `notes`. Do NOT lie about validation.",
+          "6. Apply the patch in the working tree (use shell — edit files, save).",
+          "7. Restart the proxy: `pkill -f 'litellm --config' || true; sleep 2;` then re-start the proxy",
+          "   the same way the host did, then poll `/health/readiness`.",
+          "8. Re-run the EXACT same repro flow against the patched proxy. Take AFTER_* screenshots.",
+          "9. If — and only if — every success criterion is observably met against the patched proxy:",
+          "    a. `git checkout -B shin-watcher/issue-<NUMBER>-<SHORT>` (use the task id suffix)",
+          "    b. `git add -A && git commit -m '[shin-watcher][auto-repro] Fix: <issue title> (#<n>)'`",
+          "    c. `git push shin-bot <branch>` (the remote is already configured)",
+          "    d. Use stitch_gif to build screenshots/demo.gif from BEFORE_* + AFTER_*",
+          "    e. github_create_pull_request — DRAFT, base=main, head=<bot>:<branch>, title prefixed",
+          "       `[shin-watcher][auto-repro]`, body must include BEFORE/AFTER evidence and the GIF",
+          "    f. github_add_issue_comment — post the verdict + screenshots + PR link on the issue",
+          "    g. Set fix_applied=true and pr_url=<the PR url> in your write_report payload",
+          "",
+          "If the patched proxy still shows the bug (curl still 500, screenshot still wrong):",
+          "    - Set fix_applied=false and explain in `notes`. Do NOT lie about validation.",
+          "    - Do NOT push or open a PR.",
+          "",
+          "If a github_* tool returns a 'cap hit' or 'AUTO_FIX disabled' error:",
+          "    - Stop the GitHub side immediately. Finish by calling write_report with what you have.",
         ].join("\n")
       : [
-          "",
-          "Phase 2 (FIX) is DISABLED for this run. Do NOT modify any source files.",
+          "Phase 2 (FIX, push, PR, comment) is DISABLED for this run.",
+          "Do NOT modify any source files.",
+          "Do NOT call any github_* tool that creates, updates, pushes, or comments.",
           "Write the report with a plan only.",
         ].join("\n"),
     "",
     "FINAL STEP (always):",
     "Call `write_report` exactly once with all required fields. The runner ends the run when this tool returns.",
+    "Your verdict (0-5) goes at the top of the rendered markdown.",
     "",
     VERDICT_RUBRIC,
     "",
     DIFFICULTY_RUBRIC,
     "",
     "─── SKILL: plan_repro.md ──────────────────────────────────────────────",
-    "(IMPORTANT: skip 'Phase 0 — Mini Grill Me'. You have no human to ask. Proceed directly to Agent 1 + Agent 2 work below, but do it inline yourself — do NOT spawn subagents.)",
+    "(IMPORTANT: skip 'Phase 0 — Mini Grill Me'. You have no human to ask. Proceed directly with",
+    "Agent 1 (code investigation) and Agent 2 (browser+curl repro) work below, but do it inline yourself —",
+    "do NOT spawn subagents.)",
     "",
     planRepro,
     implementSkill
-      ? `\n\n─── SKILL: implement.md ──────────────────────────────────────\n\n${implementSkill}`
+      ? `\n\n─── SKILL: implement.md ──────────────────────────────────\n\n${implementSkill}`
       : "",
   ]
     .filter(Boolean)

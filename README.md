@@ -7,6 +7,7 @@ When `AUTO_FIX=true`, easy/medium issues also get a fix attempt: the agent appli
 Built on:
 - **`@mariozechner/pi-agent-core`** — agent loop, tool execution, streaming
 - **`@mariozechner/pi-ai`** — LLM layer pointed at your **LiteLLM proxy** (so every call is logged, cost-tracked, and dogfoods litellm)
+- **`@modelcontextprotocol/sdk`** — bridges Microsoft's [Playwright MCP](https://github.com/microsoft/playwright-mcp) and the [GitHub MCP server](https://github.com/modelcontextprotocol/servers/tree/main/src/github) into pi-agent-core's `AgentTool` shape (pi-agent-core has no native MCP support, so we wrote a tiny bridge — see `src/mcp/bridge.ts`)
 - **Skills from [`BerriAI/shin-builder`](https://github.com/BerriAI/shin-builder/tree/main/skills)** — `plan_repro.md` drives Phase 1, `implement.md` drives Phase 2
 
 ## How it works
@@ -15,13 +16,23 @@ Built on:
 every INTERVAL_MIN:
   1. picker        → next open issue not in cooldown
   2. proxy         → reset ./workdir/litellm to origin/main, start litellm on :4000
-  3. agent (pi)    → load skills, run Phase 1 (repro) with shell+curl+browser tools
-  4. report parse  → extract verdict (0–5) and difficulty (easy|medium|hard)
-  5. (optional)    → Phase 2 (fix), only if verdict ≥ 3 AND difficulty ≠ hard
-                     AND AUTO_FIX=true AND daily PR cap not hit
-  6. github        → (optional) post comment on the issue, open draft fork-PR
-  7. state         → record attempt, set cooldown
+  3. ensure fork   → bot fork exists; `shin-bot` git remote configured with PAT
+  4. agent runs:
+       Phase 1 (always)
+         - browser_snapshot/click/take_screenshot via Playwright MCP
+         - shell + curl for proxy interaction
+         - github_search_code, github_list_issue_comments via GitHub MCP for context
+         - BEFORE_* screenshots → root-cause file:line → write_report (verdict + difficulty)
+       Phase 2 (if AUTO_FIX=true AND verdict ≥ 3 AND difficulty ∈ {easy, medium})
+         - shell to apply patch, restart proxy, re-run repro flow
+         - AFTER_* screenshots → stitch_gif → demo.gif
+         - git push shin-bot <branch>
+         - github_create_pull_request (DRAFT, prefixed [shin-watcher][auto-repro])
+         - github_add_issue_comment with verdict + before/after + PR link
+  5. state         → record attempt, set cooldown
 ```
+
+The agent owns Phase 2 end-to-end via MCP. The runner only sets up the conditions (proxy healthy, fork exists, remote configured) and enforces the daily PR cap via a `beforeToolCall` hook that blocks `github_create_pull_request` etc. when the cap is hit.
 
 Sequential, one issue at a time. No cloud sandbox — everything runs on the host that runs the daemon.
 
@@ -51,14 +62,24 @@ Hard runtime cap: even if the agent self-classifies easy, if `git diff --stat` e
 ```bash
 nvm use 20
 npm install
-npx playwright install chromium
 cp .env.example .env
 # edit .env — fill in LITELLM_BASE_URL, LITELLM_API_KEY, GITHUB_TOKEN, GITHUB_BOT_USERNAME
 ```
 
 You also need:
-- `gh` CLI authenticated as the bot account (used for fork creation and PR opening)
+- `gh` CLI authenticated as the bot account (used for fork creation)
 - `git`, `uv` (for `uv run litellm`), and `ImageMagick` on the host
+- Internet access for `npx -y @playwright/mcp@latest` and `npx -y @modelcontextprotocol/server-github` on first run (they self-install Playwright browsers and the GitHub MCP server)
+
+Verify the MCP wiring:
+
+```bash
+npx tsx scripts/smoke-mcp.ts
+# → spawning Playwright MCP …
+#   ✔ 23 tools (browser_snapshot, browser_click, browser_take_screenshot, …)
+# → spawning GitHub MCP …
+#   ✔ N tools (github_create_pull_request, github_add_issue_comment, …)
+```
 
 ## Running
 
@@ -96,14 +117,23 @@ runs/
     meta.json           # { issue, score, difficulty, model, duration_ms, pr_url? }
 ```
 
-## Why every LLM call goes through your LiteLLM proxy
+## Why every LLM call goes through your LiteLLM proxy (and via the Anthropic API format)
 
-`pi-ai` ships a `provider: 'litellm'` Model type with `baseUrl` and `compat` flags pre-tuned for litellm quirks (e.g. `supportsStore: false`). We construct one `Model<'openai-completions'>` at startup pointed at `LITELLM_BASE_URL` and use it for every agent in every run. That means:
+We construct one `Model<'anthropic-messages'>` at startup pointed at `LITELLM_BASE_URL` and use it for every agent in every run. That means:
 
-- All cost shows up in your litellm spend dashboard
-- All requests go through your guardrails, key rotation, rate limiting
-- Switching the underlying model is one config line in your litellm `model_list`
-- It's a real continuous dogfood test of litellm against agentic workloads
+- All cost shows up in your LiteLLM spend dashboard
+- All requests flow through your guardrails, key rotation, rate limiting
+- Switching the underlying Claude variant is one line in your LiteLLM `model_list`
+- It's a real continuous dogfood test of LiteLLM against agentic workloads
+
+**Why Anthropic format (not OpenAI Completions):**
+
+- Native Claude thinking blocks — `thinkingLevel: "high"` becomes a real `thinking.budget_tokens` parameter, not a hack
+- Native prompt caching via `cache_control` breakpoints (skill prompts cache cleanly across tool turns)
+- Cleaner tool-call semantics (no JSON-string args)
+- All of the above survive LiteLLM's `/v1/messages` passthrough untouched when the underlying model is Claude
+
+Note: `LITELLM_BASE_URL` should be the proxy ROOT with no `/v1` suffix — pi-ai's Anthropic SDK appends `/v1/messages` itself. Auth is `x-api-key`, which LiteLLM accepts as a virtual key.
 
 ## Skills
 
