@@ -50,20 +50,6 @@
     }
     .btn-new:hover { opacity: 0.85; }
 
-    /* New session input (shown when + clicked) */
-    .new-session-form {
-      padding: 10px 12px;
-      border-bottom: 1px solid var(--border);
-      display: none;
-    }
-    .new-session-form.open { display: block; }
-    .new-session-form input {
-      width: 100%; background: var(--surface); border: 1px solid var(--accent);
-      border-radius: 6px; padding: 7px 10px; font-size: 12px; color: var(--text);
-      font-family: var(--mono); outline: none;
-    }
-    .new-session-form input::placeholder { color: var(--muted); }
-    .new-session-hint { font-size: 10px; color: var(--muted); margin-top: 5px; }
 
     /* Sessions list */
     .sessions { flex: 1; overflow-y: auto; }
@@ -221,8 +207,8 @@ function verdictChip(v, status) {
 
 // ── sidebar rendering ──────────────────────────────────────────────────────
 function renderSidebar() {
-  const active = sessions.filter(s => s.status === 'running');
-  const past   = sessions.filter(s => s.status !== 'running');
+  const active = sessions.filter(s => s.status === 'running' || s.status === 'pending');
+  const past   = sessions.filter(s => s.status === 'done');
 
   let html = '';
   if (active.length) {
@@ -241,11 +227,12 @@ function sessionRow(s) {
   const sel = s.id === selected ? ' selected' : '';
   const act = s.status === 'running' ? ' active' : '';
   const pulse = s.status === 'running' ? '<span class="pulse"></span>' : '';
+  const isPending = s.status === 'pending';
   return `<div class="session-row${sel}${act}" onclick="selectSession('${s.id}')">
-    <div class="session-row-title">${pulse}${esc(s.issueTitle ?? '#'+s.issueNumber)}</div>
+    <div class="session-row-title">${pulse}${esc(s.issueTitle ?? (s.issueNumber ? '#'+s.issueNumber : 'New session'))}</div>
     <div class="session-row-meta">
-      <span>#${s.issueNumber}</span>
-      ${verdictChip(s.verdict, s.status)}
+      ${s.issueNumber ? `<span>#${s.issueNumber}</span>` : ''}
+      ${isPending ? '<span class="chip chip-run">Pending</span>' : verdictChip(s.verdict, s.status)}
       ${s.durationMs ? `<span>${fmt(s.durationMs)}</span>` : ''}
       ${s.prUrl ? `<a href="${esc(s.prUrl)}" target="_blank" style="color:var(--green);font-size:10px" onclick="event.stopPropagation()">PR↗</a>` : ''}
     </div>
@@ -406,23 +393,56 @@ function connectSSE() {
   es.onmessage = e => {
     const ev = JSON.parse(e.data);
 
-    // If run_start, add a new session to sidebar
+    // If run_start, add/upgrade session in sidebar
     if (ev.type === 'run_start') {
       const exists = sessions.find(s => s.taskId === ev.taskId);
       if (!exists) {
         const sess = {
-          id: ev.taskId,
-          taskId: ev.taskId,
-          issueNumber: ev.issueNumber,
-          issueTitle: ev.issueTitle,
-          issueUrl: ev.issueUrl,
-          status: 'running',
-          verdict: 3,
+          id: ev.taskId, taskId: ev.taskId,
+          issueNumber: ev.issueNumber, issueTitle: ev.issueTitle,
+          issueUrl: ev.issueUrl, status: 'running', verdict: 3,
           startedAt: ev.startedAt,
         };
-        sessions.unshift(sess);
+        // Replace pending session if one is open, otherwise prepend
+        if (pendingSessionId) {
+          const idx = sessions.findIndex(s => s.id === pendingSessionId);
+          if (idx >= 0) sessions.splice(idx, 1, sess);
+          else sessions.unshift(sess);
+          // If the pending session is currently selected, upgrade its panel in place
+          if (selected === pendingSessionId) {
+            selected = ev.taskId;
+            pendingSessionId = null;
+            renderSidebar();
+            // Update header title
+            const title = document.querySelector('.chat-header-title');
+            if (title) title.innerHTML = `<span class="pulse" style="display:inline-block;margin-right:6px"></span><a href="${esc(ev.issueUrl)}" target="_blank" style="color:var(--text);text-decoration:none">#${ev.issueNumber} — ${esc(ev.issueTitle)}</a>`;
+            // Add stop button
+            const hdr = document.querySelector('.chat-header');
+            if (hdr && !document.getElementById('btn-stop')) {
+              const stop = document.createElement('button');
+              stop.className = 'btn-stop show'; stop.id = 'btn-stop'; stop.textContent = '■ Stop';
+              stop.onclick = interrupt;
+              hdr.appendChild(stop);
+            }
+            // Enable steer input
+            const inp = document.getElementById('chat-input');
+            const btn = document.getElementById('btn-send');
+            if (inp) { inp.disabled = false; inp.placeholder = 'Steer the agent… (Enter to send)'; }
+            if (btn) {
+              btn.disabled = false;
+              // Re-wire send to steer
+              const s = sess;
+              btn.onclick = () => sendSteer(s);
+              inp.onkeydown = e => { if (e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendSteer(s);} };
+            }
+            appendMsg('sys','sys',`▶ <a href="${esc(ev.issueUrl)}" target="_blank">#${ev.issueNumber}</a> — ${esc(ev.issueTitle)}`);
+            return;
+          }
+          pendingSessionId = null;
+        } else {
+          sessions.unshift(sess);
+        }
         renderSidebar();
-        // Auto-select the new session
         selectSession(sess.id);
       }
       return;
@@ -431,13 +451,16 @@ function connectSSE() {
     if (ev.type === 'run_end') {
       const s = sessions.find(x => x.taskId === ev.taskId);
       if (s) { s.status = 'done'; renderSidebar(); }
-      // Refresh to pick up verdict from DB
       setTimeout(loadSessions, 2000);
     }
 
-    // Route events to the currently selected session's panel
-    const activeSession = sessions.find(x => x.taskId === ev.taskId);
-    if (activeSession && activeSession.id === selected) {
+    if (ev.type === 'no_eligible_issue') {
+      // Show message in the currently selected pending panel
+      appendMsg('sys', 'sys', 'No eligible issues right now — all are in cooldown. Try specifying a specific issue number.');
+    }
+
+    // Route to selected panel — compare taskId directly to avoid stale sessions array
+    if (ev.taskId && ev.taskId === selected) {
       handleEvent(ev);
     }
   };
@@ -466,32 +489,89 @@ async function interrupt() {
 }
 
 // ── new session ────────────────────────────────────────────────────────────
+// "+ New" creates a pending blank session immediately; user types their first
+// message in the chat input to kick it off (no separate form/popup).
+let pendingSessionId = null;
+
 btnNew.addEventListener('click', () => {
-  newForm.classList.toggle('open');
-  if (newForm.classList.contains('open')) newInput.focus();
-  else newInput.value = '';
+  openPendingSession();
 });
 
-newInput.addEventListener('keydown', async e => {
-  if (e.key === 'Escape') { newForm.classList.remove('open'); newInput.value = ''; return; }
-  if (e.key !== 'Enter') return;
-  e.preventDefault();
-  const val = newInput.value.trim();
-  newInput.value = '';
-  newForm.classList.remove('open');
+function openPendingSession() {
+  // Create a placeholder session in the sidebar
+  const id = 'pending-' + Date.now();
+  pendingSessionId = id;
+  const pending = {
+    id, taskId: null, issueNumber: null, issueTitle: 'New session',
+    issueUrl: '', status: 'pending', verdict: null,
+  };
+  sessions.unshift(pending);
+  selected = id;
+  renderSidebar();
 
-  // Detect if it's an issue number/URL or freeform description
-  const isRef = !val || /^\d+$|^#\d+|github\.com/.test(val);
-  const command = isRef ? (val || 'next') : 'next';
-  // If freeform, steer the agent with it once it starts
-  const steerMessage = isRef ? undefined : val;
+  // Render blank chat panel
+  emptyState.style.display = 'none';
+  const old = document.getElementById('chat-panel');
+  if (old) old.remove();
+  const panel = document.createElement('div');
+  panel.id = 'chat-panel';
+  panel.style.cssText = 'flex:1;display:flex;flex-direction:column;overflow:hidden;';
+  panel.innerHTML = `
+    <div class="chat-header">
+      <div class="chat-header-title" style="color:var(--muted)">New session</div>
+    </div>
+    <div class="messages" id="messages">
+      <div class="msg agent"><span class="msg-role">agent</span><span class="msg-body">Hi! Paste a GitHub issue URL or number to start an investigation, or say <em>next</em> to pick the top open bug.</span></div>
+    </div>
+    <div class="input-row">
+      <textarea id="chat-input" rows="1" placeholder="#26965  ·  github.com/BerriAI/litellm/issues/…  ·  next"></textarea>
+      <button class="btn-send" id="btn-send">Send</button>
+    </div>`;
+  main.appendChild(panel);
 
-  await fetch('/api/invoke', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ command, steerMessage }),
-  }).then(r=>r.json()).catch(e=>({error:e.message}));
-  // run_start SSE will auto-add and select the session
-});
+  const inp = panel.querySelector('#chat-input');
+  const btn = panel.querySelector('#btn-send');
+  inp.focus();
+
+  const sendFirst = async () => {
+    const msg = inp.value.trim();
+    if (!msg) return;
+    inp.value = ''; inp.style.height = 'auto';
+    appendMsg('you', 'you', esc(msg));
+
+    // Is it an issue ref or "next"? If so, start a run immediately.
+    const isIssueRef = /^\d+$|^#\d+|github\.com/.test(msg) || /^next$/i.test(msg);
+
+    if (!isIssueRef) {
+      // Just chat back — don't start a run yet
+      appendMsg('agent', 'agent',
+        `To start an investigation, give me a GitHub issue number, URL, or say <em>next</em> to pick the top open bug.`);
+      return;
+    }
+
+    // It's an issue ref — kick off the run
+    const r = await fetch('/api/invoke', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: msg }),
+    }).then(r => r.json()).catch(e => ({ error: e.message }));
+
+    if (r.error) {
+      appendMsg('sys', 'sys', esc(r.error));
+    } else {
+      appendMsg('sys', 'sys', 'Starting run… picking up the issue now');
+    }
+    // SSE run_start will upgrade this panel in-place
+  };
+
+  btn.onclick = sendFirst;
+  inp.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendFirst(); }
+  });
+  inp.addEventListener('input', () => {
+    inp.style.height = 'auto';
+    inp.style.height = Math.min(inp.scrollHeight, 120) + 'px';
+  });
+}
 
 // ── load sessions ──────────────────────────────────────────────────────────
 async function loadSessions() {
@@ -500,9 +580,6 @@ async function loadSessions() {
     fetch('/api/history').then(r=>r.json()).catch(()=>[]),
   ]);
 
-  const verdicts = {0:'None',1:'Failed',2:'Partial',3:'Similar',4:'Repro',5:'Validated'};
-
-  // Build sessions list: active runs first, then history
   const activeIds = new Set((statusData.active||[]).map(r=>r.taskId));
 
   const activeSessions = (statusData.active||[]).map(r => ({
@@ -512,7 +589,7 @@ async function loadSessions() {
   }));
 
   const historySessions = history
-    .filter(r => !activeIds.has(taskIdFromPath(r.report_path)))
+    .filter(r => r.issue_number && !activeIds.has(taskIdFromPath(r.report_path)))
     .map(r => {
       const taskId = taskIdFromPath(r.report_path);
       return {
@@ -524,7 +601,9 @@ async function loadSessions() {
       };
     });
 
-  sessions = [...activeSessions, ...historySessions];
+  // Preserve any in-memory pending sessions so loadSessions doesn't wipe them
+  const pending = sessions.filter(s => s.status === 'pending');
+  sessions = [...pending, ...activeSessions, ...historySessions];
   renderSidebar();
 
   // Auto-select first active session if nothing selected

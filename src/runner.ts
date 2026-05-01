@@ -123,6 +123,7 @@ export class Runner {
         reportPath,
         taskId,
         fixEnabled,
+        proxyPort,
       });
       bundle = await createAgent({
         rootDir: workdir,

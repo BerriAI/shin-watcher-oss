@@ -70,15 +70,18 @@ export function startDashboard(runner: Runner, port = 3333): void {
     const onEvent = (live: LiveEvent) => send({ ...live.event, taskId: live.taskId });
     const onStart = (payload: object) => send({ type: "run_start", ...payload });
     const onEnd = (payload: object) => send({ type: "run_end", ...payload });
+    const onNoIssue = () => send({ type: "no_eligible_issue" });
 
     LiveBus.on("agent_event", onEvent);
     LiveBus.on("run_start", onStart);
     LiveBus.on("run_end", onEnd);
+    LiveBus.on("no_eligible_issue", onNoIssue);
 
     const cleanup = () => {
       LiveBus.off("agent_event", onEvent);
       LiveBus.off("run_start", onStart);
       LiveBus.off("run_end", onEnd);
+      LiveBus.off("no_eligible_issue", onNoIssue);
     };
     req.on("close", cleanup);
   });
@@ -100,19 +103,22 @@ export function startDashboard(runner: Runner, port = 3333): void {
     setImmediate(async () => {
       if (fix) process.env["AUTO_FIX"] = "true";
       try {
-        // If a freeform steer message was included, inject it once the agent starts.
-        // We hook into run_start to find the taskId, then steer.
+        // Hook into run_start to inject the steer message once the agent begins.
         if (steerMessage) {
           const onStart = (payload: { taskId: string }) => {
             LiveBus.off("run_start", onStart);
             setTimeout(() => {
               const agent = LiveBus.getAgent(payload.taskId);
               if (agent) agent.prompt(steerMessage).catch(() => {});
-            }, 2000); // small delay so agent has initialized
+            }, 2000);
           };
           LiveBus.on("run_start", onStart);
         }
-        await runner.runOne(issueNumber ?? undefined);
+        const result = await runner.runOne(issueNumber ?? undefined);
+        if (!result) {
+          // No eligible issue — emit a synthetic event so the UI knows
+          LiveBus.emit("no_eligible_issue", {});
+        }
       } catch (e) {
         console.error("[dashboard] invoke error:", e);
       } finally {

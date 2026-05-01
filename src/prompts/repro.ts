@@ -10,6 +10,7 @@ interface BuildReproPromptOptions {
   reportPath: string;
   taskId: string;
   fixEnabled: boolean;
+  proxyPort?: number;
 }
 
 const TOOL_INVENTORY = `
@@ -48,7 +49,7 @@ export function buildReproSystemPrompt(opts: BuildReproPromptOptions): string {
     "",
     "ENVIRONMENT:",
     `  Working dir (litellm clone): ${opts.workdir}`,
-    `  LiteLLM proxy:               http://localhost:${config.proxy.port} (already running — do NOT start another)`,
+    `  LiteLLM proxy:               http://localhost:${opts.proxyPort ?? config.proxy.port} (already running — do NOT start another)`,
     `  Master key:                  ${config.proxy.masterKey}`,
     `  Admin login:                 ${config.proxy.uiUsername} / ${config.proxy.uiPassword}`,
     `  Screenshot dir:              ${opts.screenshotDir}`,
@@ -59,7 +60,7 @@ export function buildReproSystemPrompt(opts: BuildReproPromptOptions): string {
     TOOL_INVENTORY,
     "",
     "─── SKILL ───────────────────────────────────────────────────────────────────",
-    planReproSkill,
+    planReproSkill.replaceAll("{{TASK_ID}}", opts.taskId).replaceAll("{{ISSUE}}", `#${opts.issue.number}`),
     "",
     opts.fixEnabled
       ? [
