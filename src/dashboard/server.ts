@@ -6,7 +6,7 @@ import Database from "better-sqlite3";
 import { LiveBus, type LiveEvent } from "./live.js";
 import type { Runner } from "../runner.js";
 import { config } from "../config.js";
-import { chatWithLlm } from "./chatLlm.js";
+import { dashboardChatTurn, dashboardChatTurnStream } from "./chatLlm.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.join(__dirname, "ui");
@@ -85,13 +85,13 @@ export function startDashboard(runner: Runner, port = 3333): void {
   });
 
   /**
-   * Free-form chat via LiteLLM. If the latest user message is a repro trigger
-   * (GitHub issue URL, bare #12345, or "next"), starts `runner.runOne` in the
-   * background instead of calling the chat model.
+   * Free-form chat via LiteLLM. The model decides (via tool `start_issue_reproduction`)
+   * whether to start a repro run; no regex routing on the user message.
    */
   app.post("/api/chat", async (req, res) => {
     const body = req.body as {
       messages?: Array<{ role: string; content: string }>;
+      stream?: boolean;
     };
     const msgs = body.messages;
     if (!msgs?.length) {
@@ -102,38 +102,69 @@ export function startDashboard(runner: Runner, port = 3333): void {
       return res.status(400).json({ error: "last message must be user" });
     }
 
-    const trigger = reproTriggerFromMessage(last.content);
-    if (trigger) {
-      const issueNumber = trigger.kind === "issue" ? trigger.n : undefined;
+    const linear = msgs
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .map((m) => ({
+        role: m.role as "user" | "assistant",
+        content: m.content,
+      }));
+
+    const queueRepro = (repro: NonNullable<Awaited<ReturnType<typeof dashboardChatTurn>>["repro"]>) => {
       setImmediate(async () => {
         try {
-          const result = await runner.runOne(issueNumber);
+          const result = await runner.runOne(repro.pickNextEligible ? undefined : repro.issueNumber);
           if (!result) LiveBus.emit("no_eligible_issue", {});
         } catch (e) {
           console.error("[dashboard] chat repro error:", e);
         }
       });
+    };
 
-      const ack =
-        trigger.kind === "next"
-          ? "Starting a reproduction on the **next eligible** open issue. Use the sidebar or **Repro log** to watch live tool output — you can keep chatting here."
-          : `Starting a full reproduction for **#${trigger.n}**. Use the sidebar or **Repro log** to watch progress; you can keep chatting here.`;
-
-      return res.json({
-        reply: ack,
-        repro: true,
-        issueNumber: trigger.kind === "issue" ? trigger.n : null,
-      });
+    if (body.stream === true) {
+      res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      res.flushHeaders();
+      const ac = new AbortController();
+      const onClose = () => ac.abort();
+      req.on("close", onClose);
+      const send = (obj: object) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+      try {
+        const { reply, repro } = await dashboardChatTurnStream(linear, (chunk) => {
+          send({ type: "delta", text: chunk });
+        }, { signal: ac.signal });
+        if (repro) queueRepro(repro);
+        send({
+          type: "done",
+          reply,
+          repro: repro != null,
+          issueNumber: repro?.issueNumber ?? null,
+          pickNext: repro?.pickNextEligible ?? false,
+        });
+      } catch (e) {
+        const msg = (e as Error).message;
+        console.error("[dashboard] chat stream error:", msg);
+        send({ type: "error", message: msg });
+      } finally {
+        req.off("close", onClose);
+        res.end();
+      }
+      return;
     }
 
     try {
-      const linear = msgs
-        .filter((m) => m.role === "user" || m.role === "assistant")
-        .map((m) => ({
-          role: m.role as "user" | "assistant",
-          content: m.content,
-        }));
-      const reply = await chatWithLlm(linear);
+      const { reply, repro } = await dashboardChatTurn(linear);
+
+      if (repro) {
+        queueRepro(repro);
+        return res.json({
+          reply,
+          repro: true,
+          issueNumber: repro.issueNumber ?? null,
+          pickNext: repro.pickNextEligible,
+        });
+      }
+
       return res.json({ reply, repro: false });
     } catch (e) {
       const msg = (e as Error).message;
@@ -255,26 +286,6 @@ export function startDashboard(runner: Runner, port = 3333): void {
   app.listen(port, () => {
     console.log(`\n  Dashboard  →  http://localhost:${port}\n`);
   });
-}
-
-/** Stronger than parseIssueNumber — avoids firing on stray digits in prose. */
-function reproTriggerFromMessage(
-  text: string
-): { kind: "issue"; n: number } | { kind: "next" } | null {
-  const t = text.trim();
-  if (/^next$/i.test(t) || /^run\s+next$/i.test(t)) return { kind: "next" };
-
-  const url = t.match(/github\.com\/[^/]+\/[^/]+\/issues\/(\d+)/i);
-  if (url) return { kind: "issue", n: parseInt(url[1] as string, 10) };
-
-  if (/^#?(\d+)\s*$/i.test(t)) {
-    return { kind: "issue", n: parseInt(t.replace(/^#/, "").trim(), 10) };
-  }
-
-  const embedded = t.match(/\B#(\d{3,})\b/);
-  if (embedded) return { kind: "issue", n: parseInt(embedded[1] as string, 10) };
-
-  return null;
 }
 
 // Parse a GitHub issue number from various input formats:

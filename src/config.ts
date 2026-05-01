@@ -1,4 +1,7 @@
-import "dotenv/config";
+import dotenv from "dotenv";
+
+// Prefer `.env` over pre-set shell vars so local edits take effect (e.g. IDE/terminal exports).
+dotenv.config({ override: true });
 import path from "node:path";
 
 function required(name: string): string {

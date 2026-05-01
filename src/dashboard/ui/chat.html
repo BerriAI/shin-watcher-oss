@@ -86,14 +86,14 @@
   </aside>
 
   <main class="main">
-    <div class="chat-head" id="chat-head">Chat — paste a GitHub issue link or #number to run repro</div>
+    <div class="chat-head" id="chat-head">Chat — the assistant decides when to start a repro</div>
     <div class="msgs" id="msgs"></div>
     <div class="log-wrap" id="log-wrap">
       <div class="log-toggle" id="log-toggle">▸ Repro log — pick a run in the sidebar</div>
       <div class="log-body" id="log-body"></div>
     </div>
     <div class="input-row">
-      <textarea id="input" rows="1" placeholder="Say anything…  or paste https://github.com/BerriAI/litellm/issues/12345  or type #12345  or  next"></textarea>
+      <textarea id="input" rows="1" placeholder="Ask anything…  or “reproduce #12345” / paste a GitHub issue URL"></textarea>
       <button type="button" class="btn-send" id="btn-send">Send</button>
     </div>
   </main>
@@ -152,10 +152,79 @@ async function sendChat() {
     const r = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: chatHistory }),
+      body: JSON.stringify({ messages: chatHistory, stream: true }),
     });
-    const j = await r.json().catch(() => ({ reply: 'Bad response' }));
-    addAssistant(j.reply || j.error || '(empty)');
+    const ct = r.headers.get('content-type') || '';
+
+    if (!r.ok || !ct.includes('text/event-stream')) {
+      const raw = await r.text();
+      let j = {};
+      try {
+        j = raw ? JSON.parse(raw) : {};
+      } catch {
+        addAssistant('Server returned non-JSON (HTTP ' + r.status + '): ' + raw.slice(0, 400));
+        return;
+      }
+      addAssistant((j.reply || j.error || raw || 'HTTP ' + r.status).toString().slice(0, 2000));
+      return;
+    }
+
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    let acc = '';
+    let finalized = false;
+
+    const bubbleEl = document.createElement('div');
+    bubbleEl.className = 'bubble ast';
+    const span = document.createElement('span');
+    span.className = 'md';
+    bubbleEl.appendChild(span);
+    msgs.appendChild(bubbleEl);
+
+    const scroll = () => { msgs.scrollTop = msgs.scrollHeight; };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let sep;
+      while ((sep = buf.indexOf('\n\n')) !== -1) {
+        const block = buf.slice(0, sep);
+        buf = buf.slice(sep + 2);
+        for (const line of block.split('\n')) {
+          if (!line.startsWith('data:')) continue;
+          let j;
+          try {
+            j = JSON.parse(line.slice(5).trim());
+          } catch {
+            continue;
+          }
+          if (j.type === 'delta' && j.text) {
+            acc += j.text;
+            span.innerHTML = md(acc);
+            scroll();
+          } else if (j.type === 'done' && !finalized) {
+            finalized = true;
+            acc = j.reply != null ? j.reply : acc;
+            span.innerHTML = md(acc);
+            chatHistory.push({ role: 'assistant', content: acc });
+            scroll();
+          } else if (j.type === 'error' && !finalized) {
+            finalized = true;
+            acc = 'Sorry — chat failed: ' + (j.message || 'unknown');
+            span.innerHTML = md(acc);
+            chatHistory.push({ role: 'assistant', content: acc });
+            scroll();
+          }
+        }
+      }
+    }
+
+    if (!finalized && acc) {
+      chatHistory.push({ role: 'assistant', content: acc });
+      scroll();
+    }
   } catch (e) {
     addAssistant('Network error: ' + e.message);
   } finally {
@@ -176,7 +245,7 @@ input.addEventListener('input', () => {
 document.getElementById('btn-new').onclick = () => {
   chatHistory = [];
   msgs.innerHTML = '';
-  addAssistant("Hi — I'm here to chat. When you're ready, paste a **GitHub issue URL** or a bare **#number** (e.g. `#26987`), or type **next** to pick the next eligible bug for a full repro run.");
+  addAssistant("Hi — chat normally anytime. When you want the **full repro agent** (browser, curl, screenshots), just say so or paste an issue link — I’ll decide when to start it. You can also expand **Repro log** and pick a run in the sidebar.");
   watchTaskId = null;
   logBody.textContent = '';
   logWrap.classList.remove('open');
