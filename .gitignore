@@ -1,0 +1,22 @@
+node_modules/
+dist/
+.env
+.env.local
+
+# ephemeral working tree where litellm gets cloned per-run
+workdir/
+
+# archived reports + screenshots from each run
+runs/
+
+# state DB tracking attempts, cooldowns, daily PR cap
+state.sqlite
+state.sqlite-journal
+state.sqlite-wal
+state.sqlite-shm
+
+# editor + OS noise
+.DS_Store
+.vscode/
+.idea/
+*.swp

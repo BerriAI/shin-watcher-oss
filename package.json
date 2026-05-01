@@ -1,0 +1,38 @@
+{
+  "name": "shin-watcher",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Periodic agent that reproduces and (optionally) auto-fixes BerriAI/litellm issues. Built on @mariozechner/pi-agent-core, routes all LLM calls through a LiteLLM proxy.",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node --enable-source-maps dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "once": "tsx scripts/once.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "format": "prettier --write \"src/**/*.ts\" \"scripts/**/*.ts\""
+  },
+  "engines": {
+    "node": ">=20.10.0"
+  },
+  "dependencies": {
+    "@mariozechner/pi-agent-core": "^0.71.1",
+    "@mariozechner/pi-ai": "^0.71.1",
+    "@octokit/rest": "^21.0.2",
+    "better-sqlite3": "^11.7.0",
+    "dotenv": "^16.4.5",
+    "node-cron": "^3.0.3",
+    "playwright": "^1.49.0",
+    "sharp": "^0.33.5",
+    "typebox": "^1.1.24"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^20.17.10",
+    "@types/node-cron": "^3.0.11",
+    "prettier": "^3.4.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
