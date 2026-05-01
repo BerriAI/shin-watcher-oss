@@ -102,7 +102,7 @@
     .repro-live-status { color: var(--cyan); font-weight: 600; }
     .repro-live-status.done { color: var(--green); }
     .repro-live-steps {
-      max-height: min(32vh, 280px);
+      max-height: min(18vh, 150px);
       overflow-y: auto;
       padding: 10px 12px;
       font-family: var(--mono);
@@ -117,6 +117,30 @@
     .repro-live-step.err { border-left-color: var(--red); }
     .repro-live-tool { color: var(--purple); font-weight: 600; }
     .repro-live-msg { color: var(--text); opacity: 0.85; }
+    /* Native stream from repro model (pi-ai assistantMessageEvent — thinking + text deltas) */
+    .repro-live-agent-stream {
+      border-bottom: 1px solid var(--border);
+      background: rgba(99, 102, 241, 0.07);
+      max-height: min(40vh, 340px);
+      overflow-y: auto;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .repro-live-think {
+      display: none;
+      padding: 8px 12px 10px;
+      border-bottom: 1px dashed var(--border);
+      background: rgba(0, 0, 0, 0.22);
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .repro-live-think-label, .repro-live-say-label {
+      font-size: 10px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.06em; margin-bottom: 6px;
+    }
+    .repro-live-think-label { color: #94a3b8; }
+    .repro-live-say-label { color: var(--cyan); }
+    .repro-live-say { padding: 10px 12px 12px; color: var(--text); }
   </style>
 </head>
 <body>
@@ -171,6 +195,9 @@ let reproLivePanel = null;
 let reproTick = null;
 let reproStartedAt = 0;
 
+/** Content blocks keyed by contentIndex — streamed from agent message_update events */
+let agentThinkParts = Object.create(null);
+let agentTextParts = Object.create(null);
 const msgs = document.getElementById('msgs');
 const input = document.getElementById('input');
 const btnSend = document.getElementById('btn-send');
@@ -210,29 +237,42 @@ function clearReproLive() {
     clearInterval(reproTick);
     reproTick = null;
   }
+  agentThinkParts = Object.create(null);
+  agentTextParts = Object.create(null);
   if (reproLivePanel && reproLivePanel.parentNode) reproLivePanel.remove();
   reproLivePanel = null;
   reproStartedAt = 0;
 }
 
-function formatArgsBrief(a) {
-  if (a == null) return '';
-  try {
-    const s = JSON.stringify(a);
-    return s.length > 160 ? s.slice(0, 160) + '…' : s;
-  } catch {
-    return String(a).slice(0, 160);
-  }
+function joinAgentParts(parts) {
+  return Object.keys(parts)
+    .map(k => +k)
+    .sort((a, b) => a - b)
+    .map(i => parts[i])
+    .filter(Boolean)
+    .join('\n\n');
 }
 
-function formatResultBrief(r) {
-  if (r == null) return '';
-  try {
-    const s = JSON.stringify(r);
-    return s.length > 220 ? s.slice(0, 220) + '…' : s;
-  } catch {
-    return String(r).slice(0, 220);
+function renderAgentStream() {
+  if (!reproLivePanel) return;
+  const thinkWrap = reproLivePanel.querySelector('.repro-live-think');
+  const thinkBody = reproLivePanel.querySelector('.repro-live-think-body');
+  const sayBody = reproLivePanel.querySelector('.repro-live-agent-body');
+  const stream = reproLivePanel.querySelector('.repro-live-agent-stream');
+
+  const thinking = joinAgentParts(agentThinkParts).trim();
+  const text = joinAgentParts(agentTextParts).trim();
+
+  if (thinking) {
+    thinkWrap.style.display = 'block';
+    thinkBody.textContent = thinking.slice(-4000);
+  } else {
+    thinkWrap.style.display = 'none';
   }
+
+  sayBody.innerHTML = md(text || 'Waiting for the agent to emit text or choose a tool…');
+  if (stream) stream.scrollTop = stream.scrollHeight;
+  msgs.scrollTop = msgs.scrollHeight;
 }
 
 function appendReproStep(html, cls) {
@@ -259,6 +299,10 @@ function ensureReproLivePanel(ev) {
       '<div><div class="repro-live-title">Reproduction run <span class="repro-live-issue">#' + esc(String(ev.issueNumber)) + '</span></div>' +
       '<div class="repro-live-sub" title="' + title + '">' + title + '</div></div>' +
       '<div class="repro-live-meta"><span class="repro-live-status">Running</span> · <span class="repro-live-elapsed">0s</span></div>' +
+    '</div>' +
+    '<div class="repro-live-agent-stream">' +
+      '<div class="repro-live-think"><div class="repro-live-think-label">Thinking</div><div class="repro-live-think-body"></div></div>' +
+      '<div class="repro-live-say"><div class="repro-live-say-label">Agent stream</div><div class="repro-live-agent-body">Waiting for the agent to emit text or choose a tool…</div></div>' +
     '</div>' +
     '<div class="repro-live-steps"></div>';
   msgs.appendChild(reproLivePanel);
@@ -304,53 +348,56 @@ function handleReproLiveEvent(ev) {
     return;
   }
   if (ev.type === 'tool_execution_start') {
-    const args = formatArgsBrief(ev.args);
     appendReproStep(
-      '<span class="repro-live-tool">→ ' + esc(ev.toolName) + '</span>' + (args ? ' <span class="repro-live-msg">' + esc(args) + '</span>' : ''),
+      '<span class="repro-live-tool">→ ' + esc(ev.toolName) + '</span> <span class="repro-live-msg">running</span>',
       'run'
     );
     return;
   }
   if (ev.type === 'tool_execution_update') {
-    const pr = ev.partialResult != null ? formatResultBrief(ev.partialResult) : '';
-    if (pr) {
-      appendReproStep(
-        '<span class="repro-live-tool">⋯ ' + esc(ev.toolName) + '</span> <span class="repro-live-msg">' + esc(pr) + '</span>',
-        'run'
-      );
-    }
+    // Keep detailed commands/results out of the main chat. The raw stream remains in the bottom log.
     return;
   }
   if (ev.type === 'tool_execution_end') {
     const ok = !ev.isError;
-    const res = formatResultBrief(ev.result);
     appendReproStep(
       '<span class="repro-live-tool">← ' + esc(ev.toolName) + '</span> ' +
-        (ok ? '<span style="color:var(--green)">ok</span>' : '<span style="color:var(--red)">error</span>') +
-        (res ? ' <span class="repro-live-msg">' + esc(res) + '</span>' : ''),
+        (ok ? '<span style="color:var(--green)">ok</span>' : '<span style="color:var(--red)">error</span>'),
       ok ? 'done' : 'err'
     );
     return;
   }
   if (ev.type === 'message_update' && ev.assistantMessageEvent) {
     const ae = ev.assistantMessageEvent;
-    const bit = String(ae.delta ?? ae.text ?? '').trim();
-    if (!bit) return;
-    const summary = bit.length > 280 ? bit.slice(0, 280) + '…' : bit;
-    const steps = reproLivePanel.querySelector('.repro-live-steps');
-    if (!steps) return;
-    if (!lastMsgUpdateLine) {
-      lastMsgUpdateLine = document.createElement('div');
-      lastMsgUpdateLine.className = 'repro-live-step run';
-      lastMsgUpdateLine.innerHTML = '<span class="repro-live-tool">Assistant</span> ';
-      const span = document.createElement('span');
-      span.className = 'repro-live-msg';
-      lastMsgUpdateLine.appendChild(span);
-      steps.appendChild(lastMsgUpdateLine);
+    const idx = ae.contentIndex ?? 0;
+    if (ae.type === 'thinking_delta') {
+      agentThinkParts[idx] = (agentThinkParts[idx] || '') + (ae.delta || '');
+      renderAgentStream();
+      return;
     }
-    lastMsgUpdateLine.querySelector('.repro-live-msg').textContent = summary;
-    steps.scrollTop = steps.scrollHeight;
-    msgs.scrollTop = msgs.scrollHeight;
+    if (ae.type === 'thinking_end') {
+      agentThinkParts[idx] = ae.content || agentThinkParts[idx] || '';
+      renderAgentStream();
+      return;
+    }
+    if (ae.type === 'text_delta') {
+      agentTextParts[idx] = (agentTextParts[idx] || '') + (ae.delta || '');
+      renderAgentStream();
+      return;
+    }
+    if (ae.type === 'text_end') {
+      agentTextParts[idx] = ae.content || agentTextParts[idx] || '';
+      renderAgentStream();
+      return;
+    }
+    if (ae.type === 'toolcall_end') {
+      const tool = ae.toolCall || {};
+      if (!joinAgentParts(agentTextParts).trim() && tool.name) {
+        agentTextParts[idx] = 'Using `' + tool.name + '` to continue the investigation…';
+      }
+      renderAgentStream();
+      return;
+    }
   }
 }
 
