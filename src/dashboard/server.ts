@@ -6,12 +6,10 @@ import Database from "better-sqlite3";
 import { LiveBus, type LiveEvent } from "./live.js";
 import type { Runner } from "../runner.js";
 import { config } from "../config.js";
+import { chatWithLlm } from "./chatLlm.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.join(__dirname, "ui");
-
-// Holds a steer message to inject once a new run's agent becomes available.
-const pendingSteer = new Map<string, string>();
 
 export function startDashboard(runner: Runner, port = 3333): void {
   const app = express();
@@ -86,6 +84,68 @@ export function startDashboard(runner: Runner, port = 3333): void {
     req.on("close", cleanup);
   });
 
+  /**
+   * Free-form chat via LiteLLM. If the latest user message is a repro trigger
+   * (GitHub issue URL, bare #12345, or "next"), starts `runner.runOne` in the
+   * background instead of calling the chat model.
+   */
+  app.post("/api/chat", async (req, res) => {
+    const body = req.body as {
+      messages?: Array<{ role: string; content: string }>;
+    };
+    const msgs = body.messages;
+    if (!msgs?.length) {
+      return res.status(400).json({ error: "messages required" });
+    }
+    const last = msgs[msgs.length - 1];
+    if (last?.role !== "user") {
+      return res.status(400).json({ error: "last message must be user" });
+    }
+
+    const trigger = reproTriggerFromMessage(last.content);
+    if (trigger) {
+      const issueNumber = trigger.kind === "issue" ? trigger.n : undefined;
+      setImmediate(async () => {
+        try {
+          const result = await runner.runOne(issueNumber);
+          if (!result) LiveBus.emit("no_eligible_issue", {});
+        } catch (e) {
+          console.error("[dashboard] chat repro error:", e);
+        }
+      });
+
+      const ack =
+        trigger.kind === "next"
+          ? "Starting a reproduction on the **next eligible** open issue. Use the sidebar or **Repro log** to watch live tool output — you can keep chatting here."
+          : `Starting a full reproduction for **#${trigger.n}**. Use the sidebar or **Repro log** to watch progress; you can keep chatting here.`;
+
+      return res.json({
+        reply: ack,
+        repro: true,
+        issueNumber: trigger.kind === "issue" ? trigger.n : null,
+      });
+    }
+
+    try {
+      const linear = msgs
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map((m) => ({
+          role: m.role as "user" | "assistant",
+          content: m.content,
+        }));
+      const reply = await chatWithLlm(linear);
+      return res.json({ reply, repro: false });
+    } catch (e) {
+      const msg = (e as Error).message;
+      console.error("[dashboard] chat error:", msg);
+      return res.status(500).json({
+        reply: `Sorry — chat failed: ${msg}`,
+        repro: false,
+        error: msg,
+      });
+    }
+  });
+
   // ── POST: invoke ──────────────────────────────────────────────────────────
   // Accepts: issue number, GitHub URL, "next", or any freeform text.
   // Freeform text → picks next eligible issue and steers the agent with the message.
@@ -143,7 +203,7 @@ export function startDashboard(runner: Runner, port = 3333): void {
   // ── POST: steer (inject mid-run message) ─────────────────────────────────
 
   app.post("/api/steer", async (req, res) => {
-    const { message } = req.body as { message?: string };
+    const { message, taskId } = req.body as { message?: string; taskId?: string };
     if (!message?.trim()) return res.status(400).json({ error: "message required" });
 
     const active = LiveBus.getActiveRuns();
@@ -151,7 +211,9 @@ export function startDashboard(runner: Runner, port = 3333): void {
       return res.status(410).json({ error: "No active run to steer." });
     }
 
-    const run = active[0]!;
+    const run = taskId
+      ? active.find((r) => r.taskId === taskId) ?? active[0]!
+      : active[0]!;
     run.agent.prompt(message).catch(() => {});
 
     // Emit the steer as a synthetic event so it appears in the chat
@@ -193,6 +255,26 @@ export function startDashboard(runner: Runner, port = 3333): void {
   app.listen(port, () => {
     console.log(`\n  Dashboard  →  http://localhost:${port}\n`);
   });
+}
+
+/** Stronger than parseIssueNumber — avoids firing on stray digits in prose. */
+function reproTriggerFromMessage(
+  text: string
+): { kind: "issue"; n: number } | { kind: "next" } | null {
+  const t = text.trim();
+  if (/^next$/i.test(t) || /^run\s+next$/i.test(t)) return { kind: "next" };
+
+  const url = t.match(/github\.com\/[^/]+\/[^/]+\/issues\/(\d+)/i);
+  if (url) return { kind: "issue", n: parseInt(url[1] as string, 10) };
+
+  if (/^#?(\d+)\s*$/i.test(t)) {
+    return { kind: "issue", n: parseInt(t.replace(/^#/, "").trim(), 10) };
+  }
+
+  const embedded = t.match(/\B#(\d{3,})\b/);
+  if (embedded) return { kind: "issue", n: parseInt(embedded[1] as string, 10) };
+
+  return null;
 }
 
 // Parse a GitHub issue number from various input formats:

@@ -7,625 +7,309 @@
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
-      --bg: #0d0d0f;
-      --sidebar: #111114;
-      --surface: #18191e;
-      --border: #25262c;
-      --text: #e2e4ec;
-      --muted: #636470;
-      --cyan: #38bdf8;
-      --yellow: #fbbf24;
-      --green: #34d399;
-      --red: #f87171;
-      --purple: #c084fc;
-      --gray: #3f3f46;
-      --accent: #6366f1;
-      --mono: "JetBrains Mono","Fira Code",ui-monospace,monospace;
+      --bg: #0d0d0f; --sidebar: #111114; --surface: #18191e; --border: #25262c;
+      --text: #e2e4ec; --muted: #636470; --cyan: #38bdf8; --green: #34d399;
+      --red: #f87171; --purple: #c084fc; --accent: #6366f1;
       --sans: -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      --mono: ui-monospace, monospace;
     }
     html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--sans); overflow: hidden; }
-
-    /* ── Shell ── */
     .shell { display: flex; height: 100vh; }
 
-    /* ── Sidebar ── */
     .sidebar {
-      width: 260px; min-width: 200px;
-      background: var(--sidebar);
-      border-right: 1px solid var(--border);
-      display: flex; flex-direction: column;
-      overflow: hidden;
+      width: 240px; background: var(--sidebar); border-right: 1px solid var(--border);
+      display: flex; flex-direction: column; overflow: hidden;
     }
-    .sidebar-header {
-      padding: 14px 12px 10px;
-      border-bottom: 1px solid var(--border);
-      display: flex; align-items: center; gap: 8px;
-    }
-    .logo { width: 22px; height: 22px; background: var(--accent); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: #fff; flex-shrink: 0; }
-    .sidebar-title { font-size: 14px; font-weight: 600; flex: 1; }
-    .btn-new {
-      background: var(--accent); color: #fff; border: none;
-      border-radius: 6px; padding: 5px 10px; font-size: 12px; font-weight: 600;
-      cursor: pointer; white-space: nowrap;
-    }
-    .btn-new:hover { opacity: 0.85; }
+    .sidebar-header { padding: 12px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
+    .logo { width: 22px; height: 22px; background: var(--accent); border-radius: 6px; display: grid; place-items: center; font-size: 12px; font-weight: 700; color: #fff; }
+    .btn-new, .btn-stop-head { border: none; border-radius: 6px; padding: 5px 10px; font-size: 12px; font-weight: 600; cursor: pointer; }
+    .btn-new { background: var(--accent); color: #fff; flex: 1; }
+    .btn-stop-head { background: rgba(248,113,113,0.15); color: var(--red); }
 
-
-    /* Sessions list */
+    .section-label { padding: 10px 12px 4px; font-size: 10px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
     .sessions { flex: 1; overflow-y: auto; }
-    .section-label {
-      padding: 10px 12px 4px;
-      font-size: 10px; font-weight: 600; letter-spacing: 0.08em;
-      text-transform: uppercase; color: var(--muted);
-    }
-    .session-row {
-      padding: 8px 12px; cursor: pointer;
-      border-left: 2px solid transparent;
-      transition: background 0.1s;
-    }
-    .session-row:hover { background: rgba(255,255,255,0.04); }
-    .session-row.active { background: rgba(99,102,241,0.1); border-left-color: var(--accent); }
-    .session-row.selected { background: rgba(56,189,248,0.08); border-left-color: var(--cyan); }
-    .session-row-title {
-      font-size: 12px; color: var(--text);
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-      display: flex; align-items: center; gap: 6px; margin-bottom: 3px;
-    }
-    .pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--green); flex-shrink: 0; animation: pulse 1.4s ease-in-out infinite; }
-    @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.7)} }
-    .session-row-meta { font-size: 10px; color: var(--muted); display: flex; gap: 6px; align-items: center; }
+    .row { padding: 8px 12px; cursor: pointer; border-left: 2px solid transparent; font-size: 12px; }
+    .row:hover { background: rgba(255,255,255,0.04); }
+    .row.on { background: rgba(99,102,241,0.12); border-left-color: var(--accent); }
+    .row .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .row .m { font-size: 10px; color: var(--muted); margin-top: 2px; display: flex; gap: 6px; align-items: center; }
+    .pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: p 1.2s ease-in-out infinite; }
+    @keyframes p { 50% { opacity: 0.35; transform: scale(0.8); } }
     .chip { font-size: 10px; font-weight: 600; padding: 1px 5px; border-radius: 3px; }
-    .chip-run  { background: rgba(99,102,241,0.2); color: #a5b4fc; }
-    .chip-ok   { background: rgba(52,211,153,0.15); color: var(--green); }
-    .chip-fail { background: rgba(248,113,113,0.15); color: var(--red); }
-    .chip-part { background: rgba(251,191,36,0.15); color: var(--yellow); }
+    .crun { background: rgba(99,102,241,0.2); color: #a5b4fc; }
+    .cok { background: rgba(52,211,153,0.15); color: var(--green); }
+    .cbad { background: rgba(248,113,113,0.15); color: var(--red); }
+    .cmed { background: rgba(251,191,36,0.15); color: #fbbf24; }
 
-    /* ── Main chat ── */
-    .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+    .chat-head { padding: 10px 16px; border-bottom: 1px solid var(--border); font-size: 13px; font-weight: 600; color: var(--muted); }
+    .msgs { flex: 1; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
 
-    /* Empty state */
-    .empty {
-      flex: 1; display: flex; flex-direction: column;
-      align-items: center; justify-content: center; gap: 12px;
-      color: var(--muted);
-    }
-    .empty-icon { font-size: 36px; opacity: 0.3; }
-    .empty-text { font-size: 13px; }
-    .empty-hint { font-size: 12px; color: var(--muted); opacity: 0.6; }
+    .bubble { max-width: 92%; padding: 10px 13px; border-radius: 12px; font-size: 14px; line-height: 1.55; word-break: break-word; }
+    .bubble.user { align-self: flex-end; background: rgba(192,132,252,0.14); border: 1px solid rgba(192,132,252,0.25); }
+    .bubble.ast { align-self: flex-start; background: var(--surface); border: 1px solid var(--border); }
+    .bubble.sys { align-self: center; font-size: 12px; color: var(--muted); font-style: italic; max-width: 95%; text-align: center; border: none; background: transparent; }
 
-    /* Chat header */
-    .chat-header {
-      padding: 12px 18px;
-      border-bottom: 1px solid var(--border);
-      display: flex; align-items: center; gap: 10px;
-      min-height: 48px;
-    }
-    .chat-header-title { font-size: 13px; font-weight: 600; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .btn-stop {
-      background: rgba(248,113,113,0.12); color: var(--red);
-      border: 1px solid rgba(248,113,113,0.25);
-      border-radius: 6px; padding: 5px 10px; font-size: 12px;
-      font-weight: 600; cursor: pointer; display: none;
-    }
-    .btn-stop.show { display: block; }
+    .log-wrap { border-top: 1px solid var(--border); max-height: 28vh; display: flex; flex-direction: column; flex-shrink: 0; }
+    .log-toggle { padding: 6px 16px; font-size: 11px; color: var(--muted); cursor: pointer; user-select: none; background: rgba(0,0,0,0.25); }
+    .log-toggle:hover { color: var(--text); }
+    .log-body { flex: 1; overflow-y: auto; padding: 8px 12px; font-family: var(--mono); font-size: 11px; line-height: 1.45; color: var(--muted); display: none; background: #0a0a0c; }
+    .log-wrap.open .log-body { display: block; }
 
-    /* Messages */
-    .messages { flex: 1; overflow-y: auto; padding: 14px 18px; display: flex; flex-direction: column; gap: 2px; }
-    .msg { display: flex; gap: 8px; padding: 2px 0; }
-    .msg-role { font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; flex-shrink: 0; width: 48px; text-align: right; padding-top: 3px; }
-    .msg-body { flex: 1; font-size: 13px; line-height: 1.6; word-break: break-word; min-width: 0; }
-    .msg.think .msg-role { color: var(--gray); }
-    .msg.think .msg-body { color: #52525b; font-style: italic; font-size: 12px; }
-    .msg.agent .msg-role { color: var(--cyan); }
-    .msg.agent .msg-body { color: var(--text); }
-    .msg.tool  .msg-role { color: var(--yellow); }
-    .msg.tool  .msg-body { color: var(--yellow); font-family: var(--mono); font-size: 11px; }
-    .msg.res   .msg-role { color: var(--green); }
-    .msg.res   .msg-body { color: var(--muted); font-family: var(--mono); font-size: 11px; }
-    .msg.err   .msg-role { color: var(--red); }
-    .msg.err   .msg-body { color: var(--red); font-family: var(--mono); font-size: 11px; }
-    .msg.you   .msg-role { color: var(--purple); }
-    .msg.you   .msg-body { color: var(--text); background: rgba(192,132,252,0.1); border-radius: 6px; padding: 5px 10px; margin-left: -10px; }
-    .msg.sys   .msg-role { color: #3f3f46; }
-    .msg.sys   .msg-body { color: var(--muted); font-size: 12px; font-style: italic; }
-    .tool-badge { background: rgba(251,191,36,0.1); border: 1px solid rgba(251,191,36,0.2); border-radius: 3px; padding: 0 5px; font-size: 10px; margin-right: 5px; }
-
-    /* Input */
-    .input-row {
-      padding: 12px 18px; border-top: 1px solid var(--border);
-      display: flex; gap: 8px; align-items: flex-end;
-    }
+    .input-row { padding: 12px 16px; border-top: 1px solid var(--border); display: flex; gap: 8px; align-items: flex-end; }
     textarea {
-      flex: 1; background: var(--surface); border: 1px solid var(--border);
-      border-radius: 10px; padding: 9px 13px; font-size: 13px; color: var(--text);
-      font-family: var(--sans); resize: none; outline: none;
-      line-height: 1.5; min-height: 40px; max-height: 120px;
+      flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+      padding: 10px 13px; font-size: 14px; color: var(--text); font-family: var(--sans);
+      resize: none; outline: none; min-height: 44px; max-height: 140px; line-height: 1.45;
     }
     textarea:focus { border-color: var(--accent); }
-    textarea::placeholder { color: var(--muted); }
-    textarea:disabled { opacity: 0.4; }
-    .btn-send {
-      background: var(--accent); color: #fff; border: none;
-      border-radius: 8px; padding: 9px 14px; font-size: 13px; font-weight: 600;
-      cursor: pointer;
-    }
-    .btn-send:disabled { opacity: 0.35; cursor: not-allowed; }
+    .btn-send { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 10px 16px; font-size: 13px; font-weight: 600; cursor: pointer; }
+    .btn-send:disabled { opacity: 0.4; cursor: not-allowed; }
 
-    /* Scrollbar */
     ::-webkit-scrollbar { width: 4px; }
     ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    .md b, .md strong { font-weight: 600; }
+    .md em, .md i { font-style: italic; }
+    .md code { font-family: var(--mono); font-size: 12px; background: rgba(255,255,255,0.06); padding: 1px 4px; border-radius: 3px; }
   </style>
 </head>
 <body>
 <div class="shell">
-
-  <!-- ── Sidebar ── -->
   <aside class="sidebar">
     <div class="sidebar-header">
       <div class="logo">S</div>
-      <span class="sidebar-title">shin-watcher</span>
-      <button class="btn-new" id="btn-new">+ New</button>
+      <button type="button" class="btn-new" id="btn-new">+ New chat</button>
+      <button type="button" class="btn-stop-head" id="btn-stop-all" title="Stop all repro agents">■</button>
     </div>
-
-    <div class="sessions" id="sessions-list"></div>
+    <div class="sessions" id="sessions"></div>
   </aside>
 
-  <!-- ── Main ── -->
-  <main class="main" id="main">
-    <div class="empty" id="empty-state">
-      <div class="empty-icon">🔍</div>
-      <div class="empty-text">No session selected</div>
-      <div class="empty-hint">Click + New · runs are parallel, each gets its own worktree</div>
+  <main class="main">
+    <div class="chat-head" id="chat-head">Chat — paste a GitHub issue link or #number to run repro</div>
+    <div class="msgs" id="msgs"></div>
+    <div class="log-wrap" id="log-wrap">
+      <div class="log-toggle" id="log-toggle">▸ Repro log — pick a run in the sidebar</div>
+      <div class="log-body" id="log-body"></div>
+    </div>
+    <div class="input-row">
+      <textarea id="input" rows="1" placeholder="Say anything…  or paste https://github.com/BerriAI/litellm/issues/12345  or type #12345  or  next"></textarea>
+      <button type="button" class="btn-send" id="btn-send">Send</button>
     </div>
   </main>
-
 </div>
+
 <script>
-// ── state ──────────────────────────────────────────────────────────────────
-let sessions = [];       // {id, taskId?, issueNumber, issueTitle, issueUrl, status, verdict, difficulty, durationMs, prUrl, startedAt}
-let selected = null;     // session id
-let es = null;           // EventSource
-let currentTaskId = null;
+const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const md = s => esc(s).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/\*(.+?)\*/g,'<em>$1</em>');
 
-// ── dom ────────────────────────────────────────────────────────────────────
-const main         = document.getElementById('main');
-const emptyState   = document.getElementById('empty-state');
-const sessionsList = document.getElementById('sessions-list');
-const btnNew       = document.getElementById('btn-new');
+let chatHistory = []; // { role: 'user'|'assistant', content }
+let watchTaskId = null;
+let es = null;
 
-// ── helpers ────────────────────────────────────────────────────────────────
-const esc  = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-const trunc = (s,n) => s.length > n ? s.slice(0,n)+'…' : s;
-const fmt  = ms => ms < 60000 ? `${(ms/1000).toFixed(0)}s` : `${Math.floor(ms/60000)}m`;
+const msgs = document.getElementById('msgs');
+const input = document.getElementById('input');
+const btnSend = document.getElementById('btn-send');
+const sessionsEl = document.getElementById('sessions');
+const logWrap = document.getElementById('log-wrap');
+const logToggle = document.getElementById('log-toggle');
+const logBody = document.getElementById('log-body');
 
-function verdictChip(v, status) {
-  if (status === 'running') return '<span class="chip chip-run">Running</span>';
-  const map = {0:'None',1:'Failed',2:'Partial',3:'Similar',4:'Repro',5:'Validated'};
-  const cls = v >= 4 ? 'chip-ok' : v >= 2 ? 'chip-part' : 'chip-fail';
-  return `<span class="chip ${cls}">${map[v]??v}</span>`;
+function bubble(role, html, cls) {
+  const d = document.createElement('div');
+  d.className = 'bubble ' + cls;
+  d.innerHTML = html;
+  msgs.appendChild(d);
+  msgs.scrollTop = msgs.scrollHeight;
 }
 
-// ── sidebar rendering ──────────────────────────────────────────────────────
-function renderSidebar() {
-  const active = sessions.filter(s => s.status === 'running' || s.status === 'pending');
-  const past   = sessions.filter(s => s.status === 'done');
-
-  let html = '';
-  if (active.length) {
-    html += `<div class="section-label">Active</div>`;
-    for (const s of active) html += sessionRow(s);
-  }
-  if (past.length) {
-    html += `<div class="section-label">History</div>`;
-    for (const s of past) html += sessionRow(s);
-  }
-  if (!html) html = `<div style="padding:20px 12px;font-size:12px;color:var(--muted)">No sessions yet.<br>Click + New to start.</div>`;
-  sessionsList.innerHTML = html;
+function addUser(text) {
+  bubble('user', esc(text), 'user');
+  chatHistory.push({ role: 'user', content: text });
 }
 
-function sessionRow(s) {
-  const sel = s.id === selected ? ' selected' : '';
-  const act = s.status === 'running' ? ' active' : '';
-  const pulse = s.status === 'running' ? '<span class="pulse"></span>' : '';
-  const isPending = s.status === 'pending';
-  return `<div class="session-row${sel}${act}" onclick="selectSession('${s.id}')">
-    <div class="session-row-title">${pulse}${esc(s.issueTitle ?? (s.issueNumber ? '#'+s.issueNumber : 'New session'))}</div>
-    <div class="session-row-meta">
-      ${s.issueNumber ? `<span>#${s.issueNumber}</span>` : ''}
-      ${isPending ? '<span class="chip chip-run">Pending</span>' : verdictChip(s.verdict, s.status)}
-      ${s.durationMs ? `<span>${fmt(s.durationMs)}</span>` : ''}
-      ${s.prUrl ? `<a href="${esc(s.prUrl)}" target="_blank" style="color:var(--green);font-size:10px" onclick="event.stopPropagation()">PR↗</a>` : ''}
-    </div>
+function addAssistant(text) {
+  bubble('assistant', '<span class="md">' + md(text) + '</span>', 'ast');
+  chatHistory.push({ role: 'assistant', content: text });
+}
+
+function addSys(text) {
+  const d = document.createElement('div');
+  d.className = 'bubble sys';
+  d.textContent = text;
+  msgs.appendChild(d);
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+async function sendChat() {
+  const t = input.value.trim();
+  if (!t) return;
+  input.value = '';
+  input.style.height = 'auto';
+  addUser(t);
+  btnSend.disabled = true;
+  try {
+    const r = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: chatHistory }),
+    });
+    const j = await r.json().catch(() => ({ reply: 'Bad response' }));
+    addAssistant(j.reply || j.error || '(empty)');
+  } catch (e) {
+    addAssistant('Network error: ' + e.message);
+  } finally {
+    btnSend.disabled = false;
+    input.focus();
+  }
+}
+
+btnSend.onclick = sendChat;
+input.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+});
+input.addEventListener('input', () => {
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 140) + 'px';
+});
+
+document.getElementById('btn-new').onclick = () => {
+  chatHistory = [];
+  msgs.innerHTML = '';
+  addAssistant("Hi — I'm here to chat. When you're ready, paste a **GitHub issue URL** or a bare **#number** (e.g. `#26987`), or type **next** to pick the next eligible bug for a full repro run.");
+  watchTaskId = null;
+  logBody.textContent = '';
+  logWrap.classList.remove('open');
+  logToggle.textContent = '▸ Repro log — pick a run in the sidebar';
+};
+
+document.getElementById('btn-stop-all').onclick = async () => {
+  const r = await fetch('/api/interrupt', { method: 'POST' }).then(r => r.json());
+  addSys(r.ok ? 'Stopped all repro agents.' : (r.message || 'Nothing running.'));
+};
+
+logToggle.onclick = () => {
+  logWrap.classList.toggle('open');
+  logToggle.textContent = logWrap.classList.contains('open')
+    ? '▾ Repro log (' + (watchTaskId || 'none') + ')'
+    : '▸ Repro log — pick a run in the sidebar';
+};
+
+// ── sidebar + SSE log ─────────────────────────────────────────────
+let runs = [];
+
+function fmt(ms) {
+  return ms < 60000 ? Math.floor(ms / 1000) + 's' : Math.floor(ms / 60000) + 'm';
+}
+
+function renderRuns() {
+  const act = runs.filter(r => r.status === 'run');
+  const done = runs.filter(r => r.status === 'done');
+  let h = '';
+  if (act.length) {
+    h += '<div class="section-label">Active</div>';
+    for (const r of act) h += runRow(r);
+  }
+  if (done.length) {
+    h += '<div class="section-label">History</div>';
+    for (const r of done) h += runRow(r);
+  }
+  sessionsEl.innerHTML = h || '<div style="padding:16px;font-size:12px;color:var(--muted)">No runs yet.</div>';
+}
+
+function runRow(r) {
+  const on = r.taskId === watchTaskId ? ' on' : '';
+  const pulse = r.status === 'run' ? '<span class="pulse"></span>' : '';
+  const vmap = {0:'None',1:'Fail',2:'Part',3:'Sim',4:'Repro',5:'OK'};
+  const vchip = r.status === 'run'
+    ? '<span class="chip crun">Run</span>'
+    : '<span class="chip ' + (r.verdict >= 4 ? 'cok' : r.verdict >= 2 ? 'cmed' : 'cbad') + '">' + (vmap[r.verdict]||r.verdict) + '</span>';
+  return `<div class="row${on}" data-tid="${esc(r.taskId)}">
+    <div class="t">${pulse}${esc(r.title)}</div>
+    <div class="m">${r.num ? '#' + r.num : ''} ${vchip} ${r.dur ? fmt(r.dur) : ''}</div>
   </div>`;
 }
 
-// ── chat panel rendering ───────────────────────────────────────────────────
-function buildChatPanel(s) {
-  const isLive = s.status === 'running';
-  return `
-    <div class="chat-header">
-      <div class="chat-header-title">
-        ${isLive ? '<span class="pulse" style="display:inline-block;margin-right:6px"></span>' : ''}
-        <a href="${esc(s.issueUrl||'')}" target="_blank" style="color:var(--text);text-decoration:none">#${s.issueNumber} — ${esc(s.issueTitle)}</a>
-      </div>
-      ${isLive ? '<button class="btn-stop show" id="btn-stop">■ Stop</button>' : ''}
-    </div>
-    <div class="messages" id="messages"></div>
-    <div class="input-row">
-      <textarea id="chat-input" rows="1"
-        placeholder="${isLive ? 'Steer the agent… (Enter to send)' : 'Session ended'}"
-        ${isLive ? '' : 'disabled'}></textarea>
-      <button class="btn-send" id="btn-send" ${isLive ? '' : 'disabled'}>Send</button>
-    </div>`;
+sessionsEl.addEventListener('click', e => {
+  const row = e.target.closest('.row');
+  if (!row) return;
+  const tid = row.dataset.tid;
+  if (!tid) return;
+  watchTaskId = tid;
+  renderRuns();
+  logWrap.classList.add('open');
+  logToggle.textContent = '▾ Repro log (' + tid + ')';
+  logBody.innerHTML = '';
+  logLine('[watching ' + tid + ']');
+});
+
+function logLine(s) {
+  logBody.textContent += s + '\n';
+  logBody.scrollTop = logBody.scrollHeight;
 }
 
-function selectSession(id) {
-  selected = id;
-  renderSidebar();
-  const s = sessions.find(x => x.id === id);
-  if (!s) return;
-
-  // Render chat panel
-  emptyState.style.display = 'none';
-  // Remove old panel if any
-  const old = document.getElementById('chat-panel');
-  if (old) old.remove();
-  const panel = document.createElement('div');
-  panel.id = 'chat-panel';
-  panel.style.cssText = 'flex:1;display:flex;flex-direction:column;overflow:hidden;';
-  panel.innerHTML = buildChatPanel(s);
-  main.appendChild(panel);
-
-  // Wire stop button
-  const stopBtn = document.getElementById('btn-stop');
-  if (stopBtn) stopBtn.onclick = interrupt;
-
-  // Wire input
-  const inp = document.getElementById('chat-input');
-  const sendBtn = document.getElementById('btn-send');
-  if (inp && sendBtn) {
-    sendBtn.onclick = () => sendSteer(s);
-    inp.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendSteer(s); }
-    });
-    inp.addEventListener('input', () => {
-      inp.style.height = 'auto';
-      inp.style.height = Math.min(inp.scrollHeight, 120) + 'px';
-    });
-  }
-
-  // Load content
-  if (s.status === 'running') {
-    subscribeToActive(s.taskId);
-  } else {
-    replaySession(s);
-  }
-}
-window.selectSession = selectSession;
-
-// ── stream / replay ────────────────────────────────────────────────────────
-let lastStreamCls = null, lastStreamEl = null;
-
-function appendMsg(cls, role, html) {
-  const msgs = document.getElementById('messages');
-  if (!msgs) return null;
-  const d = document.createElement('div');
-  d.className = `msg ${cls}`;
-  d.innerHTML = `<span class="msg-role">${role}</span><span class="msg-body">${html}</span>`;
-  msgs.appendChild(d);
-  msgs.scrollTop = msgs.scrollHeight;
-  return d;
-}
-
-function appendDelta(cls, role, html) {
-  if (lastStreamCls === cls && lastStreamEl) {
-    lastStreamEl.querySelector('.msg-body').innerHTML += html;
-    document.getElementById('messages')?.scrollTo(0, 9999999);
-  } else {
-    lastStreamEl = appendMsg(cls, role, html);
-    lastStreamCls = cls;
-  }
-}
-
-function resetStream() { lastStreamCls = null; lastStreamEl = null; }
-
-function handleEvent(ev) {
-  const type = ev.type;
-  if (type === 'connected' || type === 'run_start') return; // handled elsewhere
-
-  if (type === 'run_end') {
-    resetStream();
-    appendMsg('sys', 'sys', '■ run finished');
-    // Refresh sessions so status flips to done
-    loadSessions();
-    // Re-render panel without steer input
-    if (selected) { const s = sessions.find(x=>x.id===selected); if(s) selectSession(s.id); }
-    return;
-  }
-
-  if (type === 'message_update') {
-    const ae = ev.assistantMessageEvent;
-    if (!ae) return;
-    if (ae.type === 'thinking_delta' && ae.delta) appendDelta('think','·','<span>'+esc(ae.delta)+'</span>');
-    else if (ae.type === 'text_delta' && ae.delta) appendDelta('agent','agent',esc(ae.delta));
-    else resetStream();
-    return;
-  }
-
-  resetStream();
-  if (type === 'tool_execution_start') {
-    if (ev.toolName === '__steer__') { appendMsg('you','you',esc(ev.args?.message??'')); return; }
-    appendMsg('tool','tool',`<span class="tool-badge">${esc(ev.toolName)}</span>${esc(trunc(JSON.stringify(ev.args??{}),250))}`);
-    return;
-  }
-  if (type === 'tool_execution_end') {
-    appendMsg(ev.isError?'err':'res', ev.isError?'error':'result',
-      `<span class="tool-badge">${esc(ev.toolName)}</span>${esc(trunc(JSON.stringify(ev.result??''),350))}`);
-    return;
-  }
-  if (type === 'agent_start') appendMsg('sys','sys','▶ agent started');
-  if (type === 'agent_end')   appendMsg('sys','sys','■ agent ended');
-}
-
-function subscribeToActive(taskId) {
-  appendMsg('sys','sys','Connected to live feed…');
-}
-
-async function replaySession(s) {
-  if (!s.taskId) return;
-  try {
-    const events = await fetch(`/api/runs/${s.taskId}/transcript`).then(r=>r.json());
-    for (let i = 0; i < events.length; i++) {
-      handleEvent(events[i]);
-      if (i % 8 === 0) await sleep(8);
-    }
-  } catch {
-    appendMsg('sys','sys','Transcript not available.');
-  }
-}
-
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-// ── global SSE ─────────────────────────────────────────────────────────────
 function connectSSE() {
   if (es) es.close();
   es = new EventSource('/live');
   es.onmessage = e => {
     const ev = JSON.parse(e.data);
-
-    // If run_start, add/upgrade session in sidebar
     if (ev.type === 'run_start') {
-      const exists = sessions.find(s => s.taskId === ev.taskId);
-      if (!exists) {
-        const sess = {
-          id: ev.taskId, taskId: ev.taskId,
-          issueNumber: ev.issueNumber, issueTitle: ev.issueTitle,
-          issueUrl: ev.issueUrl, status: 'running', verdict: 3,
-          startedAt: ev.startedAt,
-        };
-        // Replace pending session if one is open, otherwise prepend
-        if (pendingSessionId) {
-          const idx = sessions.findIndex(s => s.id === pendingSessionId);
-          if (idx >= 0) sessions.splice(idx, 1, sess);
-          else sessions.unshift(sess);
-          // If the pending session is currently selected, upgrade its panel in place
-          if (selected === pendingSessionId) {
-            selected = ev.taskId;
-            pendingSessionId = null;
-            renderSidebar();
-            // Update header title
-            const title = document.querySelector('.chat-header-title');
-            if (title) title.innerHTML = `<span class="pulse" style="display:inline-block;margin-right:6px"></span><a href="${esc(ev.issueUrl)}" target="_blank" style="color:var(--text);text-decoration:none">#${ev.issueNumber} — ${esc(ev.issueTitle)}</a>`;
-            // Add stop button
-            const hdr = document.querySelector('.chat-header');
-            if (hdr && !document.getElementById('btn-stop')) {
-              const stop = document.createElement('button');
-              stop.className = 'btn-stop show'; stop.id = 'btn-stop'; stop.textContent = '■ Stop';
-              stop.onclick = interrupt;
-              hdr.appendChild(stop);
-            }
-            // Enable steer input
-            const inp = document.getElementById('chat-input');
-            const btn = document.getElementById('btn-send');
-            if (inp) { inp.disabled = false; inp.placeholder = 'Steer the agent… (Enter to send)'; }
-            if (btn) {
-              btn.disabled = false;
-              // Re-wire send to steer
-              const s = sess;
-              btn.onclick = () => sendSteer(s);
-              inp.onkeydown = e => { if (e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendSteer(s);} };
-            }
-            appendMsg('sys','sys',`▶ <a href="${esc(ev.issueUrl)}" target="_blank">#${ev.issueNumber}</a> — ${esc(ev.issueTitle)}`);
-            return;
-          }
-          pendingSessionId = null;
-        } else {
-          sessions.unshift(sess);
-        }
-        renderSidebar();
-        selectSession(sess.id);
+      loadRuns();
+      addSys('Repro started: #' + ev.issueNumber + ' — ' + (ev.issueTitle || ''));
+    }
+    if (ev.type === 'run_end') loadRuns();
+    if (ev.type === 'no_eligible_issue') addSys('No eligible issue (cooldown?). Try a specific #number.');
+
+    if (watchTaskId && ev.taskId === watchTaskId) {
+      const ae = ev.assistantMessageEvent;
+      if (ev.type === 'message_update' && ae && (ae.delta || ae.text)) {
+        const bit = String(ae.delta ?? ae.text ?? '').slice(0, 180);
+        if (bit) logLine((ae.type || 'msg') + ': ' + bit);
+      } else if (ev.type === 'tool_execution_start') {
+        logLine('→ ' + ev.toolName + ' ' + JSON.stringify(ev.args || {}).slice(0, 120));
+      } else if (ev.type === 'tool_execution_end') {
+        logLine('← ' + ev.toolName + ' ' + String(JSON.stringify(ev.result || '')).slice(0, 200));
       }
-      return;
-    }
-
-    if (ev.type === 'run_end') {
-      const s = sessions.find(x => x.taskId === ev.taskId);
-      if (s) { s.status = 'done'; renderSidebar(); }
-      setTimeout(loadSessions, 2000);
-    }
-
-    if (ev.type === 'no_eligible_issue') {
-      // Show message in the currently selected pending panel
-      appendMsg('sys', 'sys', 'No eligible issues right now — all are in cooldown. Try specifying a specific issue number.');
-    }
-
-    // Route to selected panel — compare taskId directly to avoid stale sessions array
-    if (ev.taskId && ev.taskId === selected) {
-      handleEvent(ev);
     }
   };
 }
 
-// ── steer / interrupt ──────────────────────────────────────────────────────
-async function sendSteer(s) {
-  const inp = document.getElementById('chat-input');
-  if (!inp) return;
-  const msg = inp.value.trim();
-  if (!msg) return;
-  inp.value = '';
-  inp.style.height = 'auto';
-  resetStream();
-  appendMsg('you','you',esc(msg));
-  const r = await fetch('/api/steer', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ message: msg }),
-  }).then(r=>r.json()).catch(e=>({error:e.message}));
-  if (r.error) appendMsg('sys','sys',esc(r.error));
-}
-
-async function interrupt() {
-  const r = await fetch('/api/interrupt',{method:'POST'}).then(r=>r.json()).catch(()=>({}));
-  appendMsg('sys','sys', r.ok ? 'Interrupting…' : (r.message||'Nothing to interrupt.'));
-}
-
-// ── new session ────────────────────────────────────────────────────────────
-// "+ New" creates a pending blank session immediately; user types their first
-// message in the chat input to kick it off (no separate form/popup).
-let pendingSessionId = null;
-
-btnNew.addEventListener('click', () => {
-  openPendingSession();
-});
-
-function openPendingSession() {
-  // Create a placeholder session in the sidebar
-  const id = 'pending-' + Date.now();
-  pendingSessionId = id;
-  const pending = {
-    id, taskId: null, issueNumber: null, issueTitle: 'New session',
-    issueUrl: '', status: 'pending', verdict: null,
-  };
-  sessions.unshift(pending);
-  selected = id;
-  renderSidebar();
-
-  // Render blank chat panel
-  emptyState.style.display = 'none';
-  const old = document.getElementById('chat-panel');
-  if (old) old.remove();
-  const panel = document.createElement('div');
-  panel.id = 'chat-panel';
-  panel.style.cssText = 'flex:1;display:flex;flex-direction:column;overflow:hidden;';
-  panel.innerHTML = `
-    <div class="chat-header">
-      <div class="chat-header-title" style="color:var(--muted)">New session</div>
-    </div>
-    <div class="messages" id="messages">
-      <div class="msg agent"><span class="msg-role">agent</span><span class="msg-body">Hi! Paste a GitHub issue URL or number to start an investigation, or say <em>next</em> to pick the top open bug.</span></div>
-    </div>
-    <div class="input-row">
-      <textarea id="chat-input" rows="1" placeholder="#26965  ·  github.com/BerriAI/litellm/issues/…  ·  next"></textarea>
-      <button class="btn-send" id="btn-send">Send</button>
-    </div>`;
-  main.appendChild(panel);
-
-  const inp = panel.querySelector('#chat-input');
-  const btn = panel.querySelector('#btn-send');
-  inp.focus();
-
-  const sendFirst = async () => {
-    const msg = inp.value.trim();
-    if (!msg) return;
-    inp.value = ''; inp.style.height = 'auto';
-    appendMsg('you', 'you', esc(msg));
-
-    // Is it an issue ref or "next"? If so, start a run immediately.
-    const isIssueRef = /^\d+$|^#\d+|github\.com/.test(msg) || /^next$/i.test(msg);
-
-    if (!isIssueRef) {
-      // Just chat back — don't start a run yet
-      appendMsg('agent', 'agent',
-        `To start an investigation, give me a GitHub issue number, URL, or say <em>next</em> to pick the top open bug.`);
-      return;
-    }
-
-    // It's an issue ref — kick off the run
-    const r = await fetch('/api/invoke', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ command: msg }),
-    }).then(r => r.json()).catch(e => ({ error: e.message }));
-
-    if (r.error) {
-      appendMsg('sys', 'sys', esc(r.error));
-    } else {
-      appendMsg('sys', 'sys', 'Starting run… picking up the issue now');
-    }
-    // SSE run_start will upgrade this panel in-place
-  };
-
-  btn.onclick = sendFirst;
-  inp.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendFirst(); }
-  });
-  inp.addEventListener('input', () => {
-    inp.style.height = 'auto';
-    inp.style.height = Math.min(inp.scrollHeight, 120) + 'px';
-  });
-}
-
-// ── load sessions ──────────────────────────────────────────────────────────
-async function loadSessions() {
-  const [statusData, history] = await Promise.all([
-    fetch('/api/status').then(r=>r.json()).catch(()=>({active:[]})),
-    fetch('/api/history').then(r=>r.json()).catch(()=>[]),
+async function loadRuns() {
+  const [st, hist] = await Promise.all([
+    fetch('/api/status').then(r => r.json()).catch(() => ({ active: [] })),
+    fetch('/api/history').then(r => r.json()).catch(() => []),
   ]);
-
-  const activeIds = new Set((statusData.active||[]).map(r=>r.taskId));
-
-  const activeSessions = (statusData.active||[]).map(r => ({
-    id: r.taskId, taskId: r.taskId,
-    issueNumber: r.issueNumber, issueTitle: r.issueTitle, issueUrl: r.issueUrl,
-    status: 'running', verdict: 3, startedAt: r.startedAt,
+  const activeIds = new Set((st.active || []).map(x => x.taskId));
+  const act = (st.active || []).map(a => ({
+    taskId: a.taskId, title: a.issueTitle, num: a.issueNumber, status: 'run', verdict: 3, dur: null,
   }));
-
-  const historySessions = history
-    .filter(r => r.issue_number && !activeIds.has(taskIdFromPath(r.report_path)))
-    .map(r => {
-      const taskId = taskIdFromPath(r.report_path);
-      return {
-        id: taskId, taskId,
-        issueNumber: r.issue_number, issueTitle: `#${r.issue_number}`,
-        issueUrl: `https://github.com/BerriAI/litellm/issues/${r.issue_number}`,
-        status: 'done', verdict: r.verdict, difficulty: r.difficulty,
-        durationMs: r.duration_ms, prUrl: r.pr_url,
-      };
-    });
-
-  // Preserve any in-memory pending sessions so loadSessions doesn't wipe them
-  const pending = sessions.filter(s => s.status === 'pending');
-  sessions = [...pending, ...activeSessions, ...historySessions];
-  renderSidebar();
-
-  // Auto-select first active session if nothing selected
-  if (!selected && activeSessions.length > 0) {
-    selectSession(activeSessions[0].id);
-  }
+  const done = hist
+    .filter(h => h.issue_number && !activeIds.has(taskIdFromPath(h.report_path)))
+    .map(h => ({
+      taskId: taskIdFromPath(h.report_path),
+      title: '#' + h.issue_number,
+      num: h.issue_number,
+      status: 'done',
+      verdict: h.verdict,
+      dur: h.duration_ms,
+    }));
+  runs = [...act, ...done];
+  renderRuns();
 }
 
 function taskIdFromPath(p) {
   if (!p) return '';
   const parts = p.split('/');
-  const idx = parts.indexOf('runs');
-  return idx >= 0 && parts[idx+1] ? parts[idx+1] : p;
+  const i = parts.indexOf('runs');
+  return i >= 0 && parts[i + 1] ? parts[i + 1] : p;
 }
 
-// ── boot ───────────────────────────────────────────────────────────────────
-(async () => {
-  connectSSE();
-  await loadSessions();
-  // Refresh sidebar every 5s
-  setInterval(loadSessions, 5000);
-})();
+// boot
+connectSSE();
+loadRuns();
+setInterval(loadRuns, 8000);
+document.getElementById('btn-new').click();
+input.focus();
 </script>
 </body>
 </html>
