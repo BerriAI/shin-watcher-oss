@@ -36,105 +36,64 @@ const StitchGifParams = Type.Object({
   ),
 });
 
-const ListShotsParams = Type.Object({
-  prefix: Type.Optional(
-    Type.String({
-      description:
-        "Optional filename prefix filter. Use 'BEFORE' or 'AFTER' to scope.",
-    })
-  ),
-});
-
-export interface ScreenshotToolOptions {
-  /** Directory the agent's screenshots live in. */
-  screenshotDir: string;
-}
-
-export function makeScreenshotTools(opts: ScreenshotToolOptions): AgentTool[] {
-  return [
-    {
-      name: "list_screenshots",
-      label: "List Screenshots",
-      description:
-        "List screenshot files captured so far in the run's screenshot dir, sorted by mtime.",
-      parameters: ListShotsParams,
-      execute: async (_id, p: Static<typeof ListShotsParams>) => {
-        if (!fs.existsSync(opts.screenshotDir)) {
-          return {
-            content: [{ type: "text" as const, text: "(no screenshots yet)" }],
-            details: { files: [] },
-          };
+/**
+ * Stitch a sequence of PNGs into an animated GIF using ImageMagick.
+ *
+ * Why this exists: Playwright MCP can take individual screenshots, but neither
+ * pi-agent-core nor any MCP server we use stitches them into a GIF. The repro
+ * report's "fix demo" GIF is a hard requirement of the user-facing format,
+ * so we ship one ImageMagick-backed tool to handle it.
+ */
+export function makeStitchGifTool(): AgentTool<typeof StitchGifParams> {
+  return {
+    name: "stitch_gif",
+    label: "Stitch GIF",
+    description:
+      "Stitch a sequence of PNG screenshots into an animated GIF using ImageMagick `convert`. " +
+      "Use this in Phase 2 to produce the demo.gif that proves the fix works (BEFORE → AFTER). " +
+      "Requires `convert` (ImageMagick) on PATH.",
+    parameters: StitchGifParams,
+    execute: async (_id, p: Static<typeof StitchGifParams>) => {
+      for (const f of p.inputs) {
+        if (!fs.existsSync(f)) {
+          throw new Error(`Input not found: ${f}`);
         }
-        const files = fs
-          .readdirSync(opts.screenshotDir)
-          .filter((f) => f.endsWith(".png"))
-          .filter((f) => !p.prefix || f.includes(p.prefix))
-          .map((f) => {
-            const fp = path.join(opts.screenshotDir, f);
-            const stat = fs.statSync(fp);
-            return { name: f, path: fp, size: stat.size, mtime: stat.mtimeMs };
-          })
-          .sort((a, b) => a.mtime - b.mtime);
-        const text = files.length
-          ? files.map((f) => `${f.name}  (${f.size} B)`).join("\n")
-          : "(no matching screenshots)";
-        return {
-          content: [{ type: "text" as const, text }],
-          details: { files },
-        };
-      },
-    } as AgentTool<typeof ListShotsParams>,
-
-    {
-      name: "stitch_gif",
-      label: "Stitch GIF",
-      description:
-        "Stitch a sequence of PNG screenshots into an animated GIF using ImageMagick. " +
-        "Use this in Phase 2 to produce the demo.gif that proves the fix works. " +
-        "Requires `convert` (ImageMagick) on PATH.",
-      parameters: StitchGifParams,
-      execute: async (_id, p: Static<typeof StitchGifParams>) => {
-        for (const f of p.inputs) {
-          if (!fs.existsSync(f)) {
-            throw new Error(`Input not found: ${f}`);
-          }
-        }
-        fs.mkdirSync(path.dirname(p.output_path), { recursive: true });
-        const delayCs = Math.round((p.delay_ms_per_frame ?? 1500) / 10); // ImageMagick uses centiseconds
-        const width = p.width ?? 960;
-        const args = [
-          "-delay",
-          String(delayCs),
-          "-loop",
-          "0",
-          "-resize",
-          `${width}x`,
-          ...p.inputs,
-          p.output_path,
-        ];
-        try {
-          await execFileAsync("convert", args, { timeout: 60_000 });
-        } catch (e) {
-          const err = e as Error;
-          throw new Error(
-            `ImageMagick \`convert\` failed. Is ImageMagick installed?\n${err.message}`
-          );
-        }
-        const stat = fs.statSync(p.output_path);
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `GIF written: ${p.output_path} (${stat.size} bytes, ${p.inputs.length} frames)`,
-            },
-          ],
-          details: {
-            path: p.output_path,
-            bytes: stat.size,
-            frames: p.inputs.length,
+      }
+      fs.mkdirSync(path.dirname(p.output_path), { recursive: true });
+      const delayCs = Math.round((p.delay_ms_per_frame ?? 1500) / 10); // ImageMagick uses centiseconds
+      const width = p.width ?? 960;
+      const args = [
+        "-delay",
+        String(delayCs),
+        "-loop",
+        "0",
+        "-resize",
+        `${width}x`,
+        ...p.inputs,
+        p.output_path,
+      ];
+      try {
+        await execFileAsync("convert", args, { timeout: 60_000 });
+      } catch (e) {
+        const err = e as Error;
+        throw new Error(
+          `ImageMagick \`convert\` failed. Is ImageMagick installed?\n${err.message}`
+        );
+      }
+      const stat = fs.statSync(p.output_path);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `GIF written: ${p.output_path} (${stat.size} bytes, ${p.inputs.length} frames)`,
           },
-        };
-      },
-    } as AgentTool<typeof StitchGifParams>,
-  ];
+        ],
+        details: {
+          path: p.output_path,
+          bytes: stat.size,
+          frames: p.inputs.length,
+        },
+      };
+    },
+  };
 }
