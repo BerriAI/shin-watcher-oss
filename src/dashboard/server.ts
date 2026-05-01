@@ -139,8 +139,10 @@ export function startDashboard(runner: Runner, port = 3333): void {
       res.setHeader("Connection", "keep-alive");
       res.flushHeaders();
       const ac = new AbortController();
-      const onClose = () => ac.abort();
-      req.on("close", onClose);
+      const onClientGone = () => {
+        if (!res.writableEnded) ac.abort();
+      };
+      res.on("close", onClientGone);
       const send = (obj: object) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
       try {
         const { reply, repro } = await dashboardChatTurnStream(linear, (chunk) => {
@@ -160,7 +162,7 @@ export function startDashboard(runner: Runner, port = 3333): void {
         console.error("[dashboard] chat stream error:", msg);
         send({ type: "error", message: msg });
       } finally {
-        req.off("close", onClose);
+        res.off("close", onClientGone);
         res.end();
       }
       return;
