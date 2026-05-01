@@ -65,7 +65,12 @@ export function startDashboard(runner: Runner, port = 3333): void {
     const send = (data: object) => res.write(`data: ${JSON.stringify(data)}\n\n`);
     send({ type: "connected" });
 
-    const onEvent = (live: LiveEvent) => send({ ...live.event, taskId: live.taskId });
+    const onEvent = (live: LiveEvent) =>
+      send({
+        ...live.event,
+        taskId: live.taskId,
+        session_id: LiveBus.getChatSessionForTask(live.taskId) ?? null,
+      });
     const onStart = (payload: object) => send({ type: "run_start", ...payload });
     const onEnd = (payload: object) => send({ type: "run_end", ...payload });
     const onNoIssue = () => send({ type: "no_eligible_issue" });
@@ -92,7 +97,13 @@ export function startDashboard(runner: Runner, port = 3333): void {
     const body = req.body as {
       messages?: Array<{ role: string; content: string }>;
       stream?: boolean;
+      /** Browser-generated id for this chat tab/session; ties Live SSE to the right UI. */
+      session_id?: string;
     };
+    const chatSessionId =
+      typeof body.session_id === "string" && body.session_id.trim() !== ""
+        ? body.session_id.trim()
+        : undefined;
     const msgs = body.messages;
     if (!msgs?.length) {
       return res.status(400).json({ error: "messages required" });
@@ -112,7 +123,9 @@ export function startDashboard(runner: Runner, port = 3333): void {
     const queueRepro = (repro: NonNullable<Awaited<ReturnType<typeof dashboardChatTurn>>["repro"]>) => {
       setImmediate(async () => {
         try {
-          const result = await runner.runOne(repro.pickNextEligible ? undefined : repro.issueNumber);
+          const result = await runner.runOne(repro.pickNextEligible ? undefined : repro.issueNumber, {
+            chatSessionId,
+          });
           if (!result) LiveBus.emit("no_eligible_issue", {});
         } catch (e) {
           console.error("[dashboard] chat repro error:", e);
@@ -140,6 +153,7 @@ export function startDashboard(runner: Runner, port = 3333): void {
           repro: repro != null,
           issueNumber: repro?.issueNumber ?? null,
           pickNext: repro?.pickNextEligible ?? false,
+          session_id: chatSessionId ?? null,
         });
       } catch (e) {
         const msg = (e as Error).message;
@@ -162,10 +176,11 @@ export function startDashboard(runner: Runner, port = 3333): void {
           repro: true,
           issueNumber: repro.issueNumber ?? null,
           pickNext: repro.pickNextEligible,
+          session_id: chatSessionId ?? null,
         });
       }
 
-      return res.json({ reply, repro: false });
+      return res.json({ reply, repro: false, session_id: chatSessionId ?? null });
     } catch (e) {
       const msg = (e as Error).message;
       console.error("[dashboard] chat error:", msg);

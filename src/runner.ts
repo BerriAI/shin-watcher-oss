@@ -47,7 +47,10 @@ export class Runner {
     );
   }
 
-  async runOne(issueNumber?: number): Promise<RunSummary | null> {
+  async runOne(
+    issueNumber?: number,
+    opts?: { chatSessionId?: string }
+  ): Promise<RunSummary | null> {
     const issue = issueNumber
       ? await this.picker.fetchOne(issueNumber)
       : await this.picker.pickNext();
@@ -58,14 +61,17 @@ export class Runner {
     console.log(
       `[runner] picked #${issue.number}: ${issue.title} (${issue.htmlUrl})`
     );
-    return this.runForIssue(issue);
+    return this.runForIssue(issue, opts);
   }
 
   close(): void {
     this.state.close();
   }
 
-  private async runForIssue(issue: CandidateIssue): Promise<RunSummary> {
+  private async runForIssue(
+    issue: CandidateIssue,
+    opts?: { chatSessionId?: string }
+  ): Promise<RunSummary> {
     const startedAt = Date.now();
     const taskId = makeTaskId(issue.number);
     const runDir = path.join(config.paths.runs, taskId);
@@ -137,7 +143,7 @@ export class Runner {
       });
 
       // Register with LiveBus so the dashboard can stream events in real-time.
-      LiveBus.startRun(taskId, issue, bundle.agent);
+      LiveBus.startRun(taskId, issue, bundle.agent, opts?.chatSessionId);
       bundle.agent.subscribe((event) => LiveBus.pushEvent(taskId, event));
 
       const userPrompt = buildReproUserPrompt(issue);

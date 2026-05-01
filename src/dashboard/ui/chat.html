@@ -72,6 +72,51 @@
     .md b, .md strong { font-weight: 600; }
     .md em, .md i { font-style: italic; }
     .md code { font-family: var(--mono); font-size: 12px; background: rgba(255,255,255,0.06); padding: 1px 4px; border-radius: 3px; }
+
+    /* In-chat live repro progress */
+    .repro-live {
+      align-self: flex-start;
+      width: 92%;
+      max-width: 720px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: #121318;
+      overflow: hidden;
+      font-size: 12px;
+      flex-shrink: 0;
+    }
+    .repro-live-head {
+      padding: 10px 12px;
+      background: rgba(99,102,241,0.12);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+    }
+    .repro-live-title { font-weight: 600; color: var(--text); font-size: 13px; }
+    .repro-live-issue { color: var(--cyan); }
+    .repro-live-sub { font-size: 11px; color: var(--muted); max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .repro-live-meta { font-size: 11px; color: var(--muted); white-space: nowrap; }
+    .repro-live-status { color: var(--cyan); font-weight: 600; }
+    .repro-live-status.done { color: var(--green); }
+    .repro-live-steps {
+      max-height: min(32vh, 280px);
+      overflow-y: auto;
+      padding: 10px 12px;
+      font-family: var(--mono);
+      font-size: 11px;
+      line-height: 1.45;
+      color: var(--muted);
+      background: #0a0a0c;
+    }
+    .repro-live-step { margin-bottom: 8px; padding: 6px 8px; border-radius: 6px; background: rgba(255,255,255,0.03); border-left: 3px solid var(--border); }
+    .repro-live-step.run { border-left-color: var(--cyan); }
+    .repro-live-step.done { border-left-color: var(--green); }
+    .repro-live-step.err { border-left-color: var(--red); }
+    .repro-live-tool { color: var(--purple); font-weight: 600; }
+    .repro-live-msg { color: var(--text); opacity: 0.85; }
   </style>
 </head>
 <body>
@@ -103,9 +148,28 @@
 const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 const md = s => esc(s).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/\*(.+?)\*/g,'<em>$1</em>');
 
+function newChatSessionId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return 'sess-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 11);
+}
+
+/** One id per “New chat”; sent with /api/chat and echoed on Live SSE so progress stays scoped. */
+let chatSessionId = newChatSessionId();
+
+function liveEventForThisChat(ev) {
+  return ev.session_id != null && ev.session_id === chatSessionId;
+}
+
 let chatHistory = []; // { role: 'user'|'assistant', content }
 let watchTaskId = null;
 let es = null;
+
+/** Live repro panel + follow (auto-attach on run_start) */
+let reproLivePanel = null;
+let reproTick = null;
+let reproStartedAt = 0;
 
 const msgs = document.getElementById('msgs');
 const input = document.getElementById('input');
@@ -141,6 +205,155 @@ function addSys(text) {
   msgs.scrollTop = msgs.scrollHeight;
 }
 
+function clearReproLive() {
+  if (reproTick) {
+    clearInterval(reproTick);
+    reproTick = null;
+  }
+  if (reproLivePanel && reproLivePanel.parentNode) reproLivePanel.remove();
+  reproLivePanel = null;
+  reproStartedAt = 0;
+}
+
+function formatArgsBrief(a) {
+  if (a == null) return '';
+  try {
+    const s = JSON.stringify(a);
+    return s.length > 160 ? s.slice(0, 160) + '…' : s;
+  } catch {
+    return String(a).slice(0, 160);
+  }
+}
+
+function formatResultBrief(r) {
+  if (r == null) return '';
+  try {
+    const s = JSON.stringify(r);
+    return s.length > 220 ? s.slice(0, 220) + '…' : s;
+  } catch {
+    return String(r).slice(0, 220);
+  }
+}
+
+function appendReproStep(html, cls) {
+  const steps = reproLivePanel && reproLivePanel.querySelector('.repro-live-steps');
+  if (!steps) return;
+  const row = document.createElement('div');
+  row.className = 'repro-live-step ' + cls;
+  row.innerHTML = html;
+  steps.appendChild(row);
+  steps.scrollTop = steps.scrollHeight;
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+function ensureReproLivePanel(ev) {
+  clearReproLive();
+  watchTaskId = ev.taskId;
+  reproStartedAt = ev.startedAt || Date.now();
+  reproLivePanel = document.createElement('div');
+  reproLivePanel.className = 'repro-live';
+  reproLivePanel.dataset.taskId = ev.taskId;
+  const title = esc(ev.issueTitle || ('Issue #' + ev.issueNumber));
+  reproLivePanel.innerHTML =
+    '<div class="repro-live-head">' +
+      '<div><div class="repro-live-title">Reproduction run <span class="repro-live-issue">#' + esc(String(ev.issueNumber)) + '</span></div>' +
+      '<div class="repro-live-sub" title="' + title + '">' + title + '</div></div>' +
+      '<div class="repro-live-meta"><span class="repro-live-status">Running</span> · <span class="repro-live-elapsed">0s</span></div>' +
+    '</div>' +
+    '<div class="repro-live-steps"></div>';
+  msgs.appendChild(reproLivePanel);
+  const tick = () => {
+    const el = reproLivePanel && reproLivePanel.querySelector('.repro-live-elapsed');
+    if (!el) return;
+    const sec = Math.floor((Date.now() - reproStartedAt) / 1000);
+    el.textContent = sec < 60 ? sec + 's' : Math.floor(sec / 60) + 'm ' + (sec % 60) + 's';
+  };
+  tick();
+  reproTick = setInterval(tick, 1000);
+  appendReproStep('<span class="repro-live-tool">●</span> Run started — task <code>' + esc(ev.taskId.slice(0, 36)) + (ev.taskId.length > 36 ? '…' : '') + '</code>', 'run');
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+function finishReproLivePanel(taskId) {
+  if (!reproLivePanel || reproLivePanel.dataset.taskId !== taskId) return;
+  if (reproTick) {
+    clearInterval(reproTick);
+    reproTick = null;
+  }
+  const st = reproLivePanel.querySelector('.repro-live-status');
+  if (st) {
+    st.textContent = 'Finished';
+    st.classList.add('done');
+  }
+  appendReproStep('<span class="repro-live-tool">●</span> Run ended — see sidebar for verdict.', 'done');
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+let lastMsgUpdateLine = null;
+function handleReproLiveEvent(ev) {
+  if (ev.taskId == null || !liveEventForThisChat(ev)) return;
+  const panelId = reproLivePanel && reproLivePanel.dataset.taskId;
+  if (!panelId || ev.taskId !== panelId) return;
+
+  if (ev.type === 'agent_start') {
+    appendReproStep('<span class="repro-live-tool">Agent</span> started', 'run');
+    return;
+  }
+  if (ev.type === 'turn_start') {
+    appendReproStep('— model turn —', 'run');
+    return;
+  }
+  if (ev.type === 'tool_execution_start') {
+    const args = formatArgsBrief(ev.args);
+    appendReproStep(
+      '<span class="repro-live-tool">→ ' + esc(ev.toolName) + '</span>' + (args ? ' <span class="repro-live-msg">' + esc(args) + '</span>' : ''),
+      'run'
+    );
+    return;
+  }
+  if (ev.type === 'tool_execution_update') {
+    const pr = ev.partialResult != null ? formatResultBrief(ev.partialResult) : '';
+    if (pr) {
+      appendReproStep(
+        '<span class="repro-live-tool">⋯ ' + esc(ev.toolName) + '</span> <span class="repro-live-msg">' + esc(pr) + '</span>',
+        'run'
+      );
+    }
+    return;
+  }
+  if (ev.type === 'tool_execution_end') {
+    const ok = !ev.isError;
+    const res = formatResultBrief(ev.result);
+    appendReproStep(
+      '<span class="repro-live-tool">← ' + esc(ev.toolName) + '</span> ' +
+        (ok ? '<span style="color:var(--green)">ok</span>' : '<span style="color:var(--red)">error</span>') +
+        (res ? ' <span class="repro-live-msg">' + esc(res) + '</span>' : ''),
+      ok ? 'done' : 'err'
+    );
+    return;
+  }
+  if (ev.type === 'message_update' && ev.assistantMessageEvent) {
+    const ae = ev.assistantMessageEvent;
+    const bit = String(ae.delta ?? ae.text ?? '').trim();
+    if (!bit) return;
+    const summary = bit.length > 280 ? bit.slice(0, 280) + '…' : bit;
+    const steps = reproLivePanel.querySelector('.repro-live-steps');
+    if (!steps) return;
+    if (!lastMsgUpdateLine) {
+      lastMsgUpdateLine = document.createElement('div');
+      lastMsgUpdateLine.className = 'repro-live-step run';
+      lastMsgUpdateLine.innerHTML = '<span class="repro-live-tool">Assistant</span> ';
+      const span = document.createElement('span');
+      span.className = 'repro-live-msg';
+      lastMsgUpdateLine.appendChild(span);
+      steps.appendChild(lastMsgUpdateLine);
+    }
+    lastMsgUpdateLine.querySelector('.repro-live-msg').textContent = summary;
+    steps.scrollTop = steps.scrollHeight;
+    msgs.scrollTop = msgs.scrollHeight;
+  }
+}
+
 async function sendChat() {
   const t = input.value.trim();
   if (!t) return;
@@ -152,7 +365,7 @@ async function sendChat() {
     const r = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: chatHistory, stream: true }),
+      body: JSON.stringify({ messages: chatHistory, stream: true, session_id: chatSessionId }),
     });
     const ct = r.headers.get('content-type') || '';
 
@@ -245,8 +458,12 @@ input.addEventListener('input', () => {
 document.getElementById('btn-new').onclick = () => {
   chatHistory = [];
   msgs.innerHTML = '';
-  addAssistant("Hi — chat normally anytime. When you want the **full repro agent** (browser, curl, screenshots), just say so or paste an issue link — I’ll decide when to start it. You can also expand **Repro log** and pick a run in the sidebar.");
   watchTaskId = null;
+  lastMsgUpdateLine = null;
+  clearReproLive();
+  chatSessionId = newChatSessionId();
+  document.getElementById('chat-head').title = 'session_id: ' + chatSessionId;
+  addAssistant("Hi — chat normally anytime. When you want the **full repro agent** (browser, curl, screenshots), just say so or paste an issue link — I’ll decide when to start it. You can also expand **Repro log** and pick a run in the sidebar.");
   logBody.textContent = '';
   logWrap.classList.remove('open');
   logToggle.textContent = '▸ Repro log — pick a run in the sidebar';
@@ -324,10 +541,23 @@ function connectSSE() {
     const ev = JSON.parse(e.data);
     if (ev.type === 'run_start') {
       loadRuns();
-      addSys('Repro started: #' + ev.issueNumber + ' — ' + (ev.issueTitle || ''));
+      if (liveEventForThisChat(ev)) {
+        lastMsgUpdateLine = null;
+        addSys('Repro started: #' + ev.issueNumber + ' — ' + (ev.issueTitle || ''));
+        ensureReproLivePanel(ev);
+      }
+      renderRuns();
     }
-    if (ev.type === 'run_end') loadRuns();
+    if (ev.type === 'run_end') {
+      if (liveEventForThisChat(ev)) {
+        finishReproLivePanel(ev.taskId);
+        lastMsgUpdateLine = null;
+      }
+      loadRuns();
+    }
     if (ev.type === 'no_eligible_issue') addSys('No eligible issue (cooldown?). Try a specific #number.');
+
+    handleReproLiveEvent(ev);
 
     if (watchTaskId && ev.taskId === watchTaskId) {
       const ae = ev.assistantMessageEvent;
@@ -338,6 +568,8 @@ function connectSSE() {
         logLine('→ ' + ev.toolName + ' ' + JSON.stringify(ev.args || {}).slice(0, 120));
       } else if (ev.type === 'tool_execution_end') {
         logLine('← ' + ev.toolName + ' ' + String(JSON.stringify(ev.result || '')).slice(0, 200));
+      } else if (ev.type === 'tool_execution_update') {
+        logLine('⋯ ' + ev.toolName + ' ' + String(JSON.stringify(ev.partialResult ?? '')).slice(0, 160));
       }
     }
   };
@@ -378,6 +610,7 @@ connectSSE();
 loadRuns();
 setInterval(loadRuns, 8000);
 document.getElementById('btn-new').click();
+document.getElementById('chat-head').title = 'session_id: ' + chatSessionId;
 input.focus();
 </script>
 </body>
