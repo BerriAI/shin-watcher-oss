@@ -29,6 +29,10 @@ import { LiveBus } from "./dashboard/live.js";
  * directly; it only sets up the conditions (fork exists, remote configured,
  * proxy is healthy) so the agent can do its job autonomously.
  */
+// Each concurrent run gets its own proxy port so they don't conflict.
+let nextPort = config.proxy.port;
+function allocatePort(): number { return nextPort++; }
+
 export class Runner {
   private state: State;
   private picker: Picker;
@@ -85,9 +89,10 @@ export class Runner {
     }, timeoutMs);
 
     try {
-      // 1. Prepare working tree (fresh checkout of origin/main).
+      // 1. Prepare working tree — each run gets its own isolated clone so
+      //    concurrent runs don't clobber each other's git state.
       const workdir = prepareWorkdir({
-        workdir: path.join(config.paths.workdir, "litellm"),
+        workdir: path.join(config.paths.workdir, taskId, "litellm"),
         ref: "main",
       });
 
@@ -98,10 +103,11 @@ export class Runner {
         ensureBotRemote(workdir);
       }
 
-      // 3. Start the local litellm proxy on :PROXY_PORT.
+      // 3. Start the local litellm proxy on an allocated port (unique per run).
+      const proxyPort = allocatePort();
       proxy = await startProxy({
         workdir,
-        port: config.proxy.port,
+        port: proxyPort,
         masterKey: config.proxy.masterKey,
         uiUsername: config.proxy.uiUsername,
         uiPassword: config.proxy.uiPassword,

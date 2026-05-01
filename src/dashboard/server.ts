@@ -10,10 +10,8 @@ import { config } from "../config.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.join(__dirname, "ui");
 
-// Track whether a run is currently queued/running to prevent double-invocation.
-let runInProgress = false;
-// Hold the current agent so we can abort it.
-let currentTaskId: string | null = null;
+// Holds a steer message to inject once a new run's agent becomes available.
+const pendingSteer = new Map<string, string>();
 
 export function startDashboard(runner: Runner, port = 3333): void {
   const app = express();
@@ -29,8 +27,7 @@ export function startDashboard(runner: Runner, port = 3333): void {
   app.get("/api/status", (_req, res) => {
     const active = LiveBus.getActiveRuns();
     res.json({
-      busy: runInProgress,
-      currentTaskId,
+      busy: active.length > 0,
       active: active.map((r) => ({
         taskId: r.taskId,
         issueNumber: r.issue.number,
@@ -87,40 +84,38 @@ export function startDashboard(runner: Runner, port = 3333): void {
   });
 
   // ── POST: invoke ──────────────────────────────────────────────────────────
+  // Accepts: issue number, GitHub URL, "next", or any freeform text.
+  // Freeform text → picks next eligible issue and steers the agent with the message.
 
   app.post("/api/invoke", async (req, res) => {
-    const { command } = req.body as { command?: string };
-    if (!command?.trim()) return res.status(400).json({ error: "command required" });
+    const { command, steerMessage } = req.body as { command?: string; steerMessage?: string };
+    const raw = (command ?? "").trim();
 
-    if (runInProgress) {
-      return res.json({
-        queued: false,
-        message: "A run is already in progress. Use /api/interrupt to stop it first.",
-      });
-    }
-
-    const issueNumber = parseIssueNumber(command.trim());
-    const runNext = !issueNumber && /next/i.test(command);
-    const fix = /\bfix\b/i.test(command);
-
-    if (issueNumber === null && !runNext) {
-      return res.json({
-        queued: false,
-        message: `Didn't understand that. Try:\n  run #12345\n  run next\n  run #12345 fix\n  Or paste a GitHub issue URL.`,
-      });
-    }
+    // Parse issue number from URL or #N notation
+    const issueNumber = parseIssueNumber(raw);
+    const fix = /\bfix\b/i.test(raw);
 
     res.json({ queued: true, issueNumber: issueNumber ?? null });
 
     setImmediate(async () => {
-      runInProgress = true;
       if (fix) process.env["AUTO_FIX"] = "true";
       try {
+        // If a freeform steer message was included, inject it once the agent starts.
+        // We hook into run_start to find the taskId, then steer.
+        if (steerMessage) {
+          const onStart = (payload: { taskId: string }) => {
+            LiveBus.off("run_start", onStart);
+            setTimeout(() => {
+              const agent = LiveBus.getAgent(payload.taskId);
+              if (agent) agent.prompt(steerMessage).catch(() => {});
+            }, 2000); // small delay so agent has initialized
+          };
+          LiveBus.on("run_start", onStart);
+        }
         await runner.runOne(issueNumber ?? undefined);
       } catch (e) {
         console.error("[dashboard] invoke error:", e);
       } finally {
-        runInProgress = false;
         if (fix) delete process.env["AUTO_FIX"];
       }
     });
@@ -162,6 +157,18 @@ export function startDashboard(runner: Runner, port = 3333): void {
     });
 
     res.json({ ok: true, taskId: run.taskId });
+  });
+
+  // ── API: transcript ───────────────────────────────────────────────────────
+
+  app.get("/api/runs/:taskId/transcript", (req, res) => {
+    const transcriptPath = path.join(config.paths.runs, req.params["taskId"] as string, "transcript.jsonl");
+    if (!fs.existsSync(transcriptPath)) return res.status(404).json([]);
+    const lines = fs.readFileSync(transcriptPath, "utf-8")
+      .split("\n").filter(Boolean)
+      .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+      .filter(Boolean);
+    res.json(lines);
   });
 
   // ── Static: screenshots ───────────────────────────────────────────────────

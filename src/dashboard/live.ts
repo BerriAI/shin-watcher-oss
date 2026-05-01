@@ -32,7 +32,7 @@ class LiveBusImpl extends EventEmitter {
 
   endRun(taskId: string): void {
     this.activeRuns.delete(taskId);
-    this.emit("run_end", { taskId });
+    this.emit("run_end", { taskId, type: "run_end" });
   }
 
   pushEvent(taskId: string, event: AgentEvent): void {
