@@ -137,18 +137,15 @@ Note: `LITELLM_BASE_URL` should be the proxy ROOT with no `/v1` suffix — pi-ai
 
 ## Skills
 
-Skills are vendored from `BerriAI/shin-builder` into `./skills/`. They get loaded at agent startup and prepended to the system prompt:
+Skills live in `./skills/` and are loaded at agent startup into the system prompt:
 
-- `plan_repro.md` — Phase 1 playbook (Phase 0 grill is auto-skipped)
-- `implement.md` — Phase 2 playbook
-- `grill_me.md` — kept for reference; the daemon never calls it (autonomous mode)
+- `plan_repro.md` — score 0-5, repro screenshots/GIFs, post GitHub comment, QA checklist
+- `implement.md` — Phase 2 fix playbook (only loaded when `AUTO_FIX=true`)
 
-To refresh the skills, re-vendor from upstream:
+To refresh `implement.md` from upstream:
 
 ```bash
-gh api repos/BerriAI/shin-builder/contents/skills/plan_repro.md --jq .content | base64 -d > skills/plan_repro.md
-gh api repos/BerriAI/shin-builder/contents/skills/implement.md  --jq .content | base64 -d > skills/implement.md
-gh api repos/BerriAI/shin-builder/contents/skills/grill_me.md   --jq .content | base64 -d > skills/grill_me.md
+gh api repos/BerriAI/shin-builder/contents/skills/implement.md --jq .content | base64 -d > skills/implement.md
 ```
 
 ## Limits
