@@ -182,8 +182,10 @@ export function startDashboard(runner: Runner, port = 3333): void {
       };
       res.on("close", onClientGone);
       const send = (obj: object) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+      let sentDelta = false;
       try {
         const { reply, repro } = await dashboardChatTurnStream(linear, (chunk) => {
+          sentDelta = true;
           send({ type: "delta", text: chunk });
         }, { signal: ac.signal });
         if (repro) queueRepro(repro);
@@ -198,6 +200,26 @@ export function startDashboard(runner: Runner, port = 3333): void {
       } catch (e) {
         const msg = (e as Error).message;
         console.error("[dashboard] chat stream error:", msg);
+        if (!sentDelta && /terminated|UND_ERR|fetch failed/i.test(msg)) {
+          try {
+            const { reply, repro } = await dashboardChatTurn(linear);
+            if (repro) queueRepro(repro);
+            send({
+              type: "done",
+              reply,
+              repro: repro != null,
+              issueNumber: repro?.issueNumber ?? null,
+              pickNext: repro?.pickNextEligible ?? false,
+              session_id: chatSessionId ?? null,
+            });
+            return;
+          } catch (fallbackError) {
+            const fallbackMsg = (fallbackError as Error).message;
+            console.error("[dashboard] chat fallback error:", fallbackMsg);
+            send({ type: "error", message: fallbackMsg });
+            return;
+          }
+        }
         send({ type: "error", message: msg });
       } finally {
         res.off("close", onClientGone);

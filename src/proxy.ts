@@ -1,5 +1,4 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -25,35 +24,49 @@ export interface PrepareOptions {
  * Creates a fresh shallow clone the first time, then `fetch + reset --hard + clean -fdx`
  * on subsequent runs (much faster than re-cloning a 100k-commit repo).
  */
-export function prepareWorkdir(opts: PrepareOptions): string {
+export async function prepareWorkdir(opts: PrepareOptions): Promise<string> {
   const cloneUrl = opts.cloneUrl ?? "https://github.com/BerriAI/litellm.git";
   const ref = opts.ref ?? "main";
   const target = path.resolve(opts.workdir);
   fs.mkdirSync(path.dirname(target), { recursive: true });
 
   if (!fs.existsSync(path.join(target, ".git"))) {
-    execFileSync("git", ["clone", "--depth", "50", cloneUrl, target], {
-      stdio: "inherit",
-    });
+    await runCommand("git", ["clone", "--depth", "50", cloneUrl, target]);
   }
 
   // Fetch latest commits. The explicit refspec writes the remote-tracking ref
   // even on a shallow clone where "fetch origin main" only writes FETCH_HEAD.
-  execFileSync(
+  await runCommand(
     "git",
     ["fetch", "origin", `+refs/heads/${ref}:refs/remotes/origin/${ref}`, "--depth", "50"],
-    { cwd: target, stdio: "inherit" }
+    target
   );
-  execFileSync("git", ["reset", "--hard", `origin/${ref}`], {
-    cwd: target,
-    stdio: "inherit",
-  });
-  execFileSync("git", ["clean", "-fdx"], {
-    cwd: target,
-    stdio: "inherit",
-  });
+  await runCommand("git", ["reset", "--hard", `origin/${ref}`], target);
+  await runCommand("git", ["clean", "-fdx"], target);
 
   return target;
+}
+
+async function runCommand(command: string, args: string[], cwd?: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd,
+      stdio: "inherit",
+    });
+    child.on("error", reject);
+    child.on("exit", (code, signal) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(
+        new Error(
+          `${command} ${args.join(" ")} failed` +
+            (signal ? ` with signal ${signal}` : ` with exit code ${code}`)
+        )
+      );
+    });
+  });
 }
 
 export interface StartProxyOptions {

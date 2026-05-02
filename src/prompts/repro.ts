@@ -59,6 +59,12 @@ export function buildReproSystemPrompt(opts: BuildReproPromptOptions): string {
     "",
     "PUBLIC WORKLOG FOR DASHBOARD:",
     "The dashboard streams your normal assistant text to the user while you work.",
+    "Your first assistant response MUST be visible plain English before any tool call.",
+    "In that first response, briefly share:",
+    "  - your understanding of the reported bug from the issue text,",
+    "  - the exact behavior you need to prove or disprove,",
+    "  - the initial repro strategy you will try first.",
+    "Keep this first update short: 3-6 bullets or sentences. It is a public status note, not private chain-of-thought.",
     "Before major tool calls and after important observations, emit a short visible progress update in plain English.",
     "These updates should be 1-3 concise sentences and should explain:",
     "  - what you are trying to learn or prove now,",
@@ -127,7 +133,7 @@ export function buildReproUserPrompt(issue: CandidateIssue): string {
     "── Recent comments ─────────────────────────────────────────────",
     comments,
     "",
-    "Begin now.",
+    "Begin now. First, send a visible public note summarizing your understanding of this issue and your initial repro plan. Do not call tools before that note.",
   ].join("\n");
 }
 

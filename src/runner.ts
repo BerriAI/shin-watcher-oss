@@ -100,7 +100,7 @@ export class Runner {
       LiveBus.setupRun(taskId, issue, opts?.chatSessionId, "Preparing isolated worktree");
       // 1. Prepare working tree — each run gets its own isolated clone so
       //    concurrent runs don't clobber each other's git state.
-      const workdir = prepareWorkdir({
+      const workdir = await prepareWorkdir({
         workdir: path.join(config.paths.workdir, taskId, "litellm"),
         ref: "main",
       });
