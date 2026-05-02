@@ -2,6 +2,9 @@
 
 A long-running agent that periodically picks an open issue from `BerriAI/litellm`, clones the repo on the host, runs the proxy, attempts to reproduce the bug with screenshots, and writes a fix plan with a confidence verdict.
 
+<img width="1878" height="1685" alt="Xnapper-2026-05-01-19 45 52" src="https://github.com/user-attachments/assets/9a03fcb5-9a7a-4780-9ffe-50ea4fb945b7" />
+
+
 When `AUTO_FIX=true`, easy/medium issues also get a fix attempt: the agent applies the patch in the working tree, re-runs the exact repro flow against the patched proxy, captures BEFORE/AFTER screenshots and a GIF, pushes the branch to a bot fork, and opens a draft PR upstream.
 
 Built on:
