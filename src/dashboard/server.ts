@@ -96,6 +96,7 @@ export function startDashboard(port = 3333): void {
   // ── Pages ──────────────────────────────────────────────────────────────────
 
   app.get("/", (_req, res) => res.sendFile(path.join(UI_DIR, "chat.html")));
+  app.get("/runs", (_req, res) => res.sendFile(path.join(UI_DIR, "runs.html")));
 
   // ── API: status ────────────────────────────────────────────────────────────
 

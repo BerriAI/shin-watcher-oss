@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>shin-watcher — runs</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0d0d0f; --sidebar: #111114; --surface: #18191e; --border: #25262c;
+      --text: #e2e4ec; --muted: #636470; --cyan: #38bdf8; --green: #34d399;
+      --red: #f87171; --yellow: #fbbf24; --purple: #c084fc; --accent: #6366f1;
+      --sans: -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      --mono: ui-monospace, monospace;
+    }
+    html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--sans); }
+
+    /* ── shell ── */
+    .shell { display: flex; height: 100vh; }
+
+    /* ── sidebar ── */
+    .sidebar { width: 200px; background: var(--sidebar); border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 12px 0; flex-shrink: 0; }
+    .sidebar-header { padding: 0 12px 12px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .logo { width: 22px; height: 22px; background: var(--accent); border-radius: 6px; display: grid; place-items: center; font-size: 12px; font-weight: 700; color: #fff; flex-shrink: 0; }
+    .logo-label { font-size: 13px; font-weight: 700; }
+    .nav-link { display: flex; align-items: center; gap: 8px; padding: 7px 12px; font-size: 13px; color: var(--muted); text-decoration: none; border-radius: 6px; margin: 1px 6px; }
+    .nav-link:hover { background: rgba(255,255,255,0.04); color: var(--text); }
+    .nav-link.active { background: rgba(99,102,241,0.12); color: var(--text); }
+    .nav-icon { font-size: 14px; width: 18px; text-align: center; }
+
+    /* ── main ── */
+    .main { flex: 1; overflow-y: auto; padding: 28px 32px; }
+    h1 { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+    .subtitle { font-size: 13px; color: var(--muted); margin-bottom: 28px; }
+
+    /* ── section ── */
+    .section { margin-bottom: 36px; }
+    .section-title { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
+
+    /* ── active run cards ── */
+    .active-grid { display: flex; flex-direction: column; gap: 8px; }
+    .run-card {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+      padding: 12px 14px; display: flex; align-items: center; gap: 12px;
+    }
+    .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: p 1.2s ease-in-out infinite; flex-shrink: 0; }
+    @keyframes p { 50% { opacity: 0.3; transform: scale(0.8); } }
+    .run-card-body { flex: 1; min-width: 0; }
+    .run-card-title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .run-card-meta { font-size: 11px; color: var(--muted); margin-top: 3px; display: flex; gap: 10px; }
+    .phase-badge { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px; background: rgba(99,102,241,0.2); color: #a5b4fc; }
+    .run-card a { font-size: 11px; color: var(--accent); text-decoration: none; flex-shrink: 0; }
+    .run-card a:hover { text-decoration: underline; }
+    .empty { font-size: 13px; color: var(--muted); font-style: italic; padding: 6px 0; }
+
+    /* ── history table ── */
+    .table-wrap { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    thead th {
+      padding: 9px 14px; text-align: left; font-size: 10px; font-weight: 600; letter-spacing: 0.05em;
+      text-transform: uppercase; color: var(--muted); background: rgba(255,255,255,0.02);
+      border-bottom: 1px solid var(--border);
+    }
+    tbody tr { border-bottom: 1px solid rgba(37,38,44,0.6); }
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: rgba(255,255,255,0.025); }
+    td { padding: 10px 14px; vertical-align: middle; }
+    td.issue a { color: var(--text); text-decoration: none; font-weight: 600; }
+    td.issue a:hover { color: var(--accent); }
+    td.when { color: var(--muted); font-size: 12px; white-space: nowrap; }
+    td.dur { color: var(--muted); font-size: 12px; white-space: nowrap; }
+    td.err { font-size: 11px; color: var(--red); max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    /* ── verdict chips ── */
+    .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 5px; white-space: nowrap; }
+    .v5 { background: rgba(52,211,153,0.18); color: var(--green); }
+    .v4 { background: rgba(52,211,153,0.12); color: #6ee7b7; }
+    .v3 { background: rgba(251,191,36,0.15); color: var(--yellow); }
+    .v2 { background: rgba(251,191,36,0.1); color: #fcd34d; }
+    .v1 { background: rgba(248,113,113,0.12); color: #fca5a5; }
+    .v0 { background: rgba(100,100,110,0.2); color: var(--muted); }
+    .diff { font-size: 10px; font-weight: 600; padding: 2px 5px; border-radius: 3px; background: rgba(255,255,255,0.06); color: var(--muted); }
+
+    /* ── refresh ── */
+    .toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+    .btn-refresh { background: rgba(255,255,255,0.06); border: 1px solid var(--border); border-radius: 6px; color: var(--muted); font-size: 12px; padding: 5px 10px; cursor: pointer; }
+    .btn-refresh:hover { color: var(--text); border-color: var(--accent); }
+    .last-updated { font-size: 11px; color: var(--muted); }
+
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  </style>
+</head>
+<body>
+<div class="shell">
+  <nav class="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">S</div>
+      <span class="logo-label">shin-watcher</span>
+    </div>
+    <a class="nav-link" href="/"><span class="nav-icon">💬</span> Chat</a>
+    <a class="nav-link active" href="/runs"><span class="nav-icon">🔬</span> Runs</a>
+  </nav>
+
+  <main class="main">
+    <h1>Repro runs</h1>
+    <p class="subtitle">Active and historical reproduction attempts</p>
+
+    <!-- Active -->
+    <div class="section">
+      <div class="toolbar">
+        <div class="section-title">Active now</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span class="last-updated" id="last-updated"></span>
+          <button class="btn-refresh" onclick="load()">↻ Refresh</button>
+        </div>
+      </div>
+      <div class="active-grid" id="active-grid">
+        <div class="empty">Loading…</div>
+      </div>
+    </div>
+
+    <!-- History -->
+    <div class="section">
+      <div class="section-title">History (last 20)</div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Issue</th>
+              <th>Verdict</th>
+              <th>Difficulty</th>
+              <th>When</th>
+              <th>Duration</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+          <tbody id="history-body">
+            <tr><td colspan="6" class="empty" style="padding:16px 14px">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+const OWNER = 'BerriAI';
+const REPO  = 'litellm';
+
+const VERDICT_LABELS = {
+  5: ['v5', '5/5 Validated'],
+  4: ['v4', '4/5 Reproduced'],
+  3: ['v3', '3/5 Similar'],
+  2: ['v2', '2/5 Partial'],
+  1: ['v1', '1/5 Setup fail'],
+  0: ['v0', '0/5 Not repro'],
+};
+
+function verdictChip(v) {
+  const [cls, label] = VERDICT_LABELS[v] ?? ['v0', `${v}/5`];
+  return `<span class="chip ${cls}">${label}</span>`;
+}
+
+function diffChip(d) {
+  if (!d) return '';
+  return `<span class="diff">${d}</span>`;
+}
+
+function relTime(iso) {
+  if (!iso) return '—';
+  const diff = Date.now() - new Date(iso).getTime();
+  const s = Math.floor(diff / 1000);
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s/60)}m ago`;
+  if (s < 86400) return `${Math.floor(s/3600)}h ago`;
+  return `${Math.floor(s/86400)}d ago`;
+}
+
+function fmtDur(ms) {
+  if (!ms) return '—';
+  if (ms < 60000) return `${(ms/1000).toFixed(0)}s`;
+  return `${(ms/60000).toFixed(1)}m`;
+}
+
+function issueUrl(n) {
+  return `https://github.com/${OWNER}/${REPO}/issues/${n}`;
+}
+
+async function load() {
+  document.getElementById('last-updated').textContent = 'Refreshing…';
+  const [statusRes, histRes] = await Promise.all([
+    fetch('/api/status'),
+    fetch('/api/history'),
+  ]);
+  const status = await statusRes.json();
+  const history = await histRes.json();
+
+  // Active
+  const grid = document.getElementById('active-grid');
+  if (!status.active?.length) {
+    grid.innerHTML = '<div class="empty">No active runs right now.</div>';
+  } else {
+    grid.innerHTML = status.active.map(r => `
+      <div class="run-card">
+        <div class="pulse"></div>
+        <div class="run-card-body">
+          <div class="run-card-title">#${r.issueNumber} — ${escHtml(r.issueTitle ?? '')}</div>
+          <div class="run-card-meta">
+            <span>Started ${relTime(new Date(r.startedAt).toISOString())}</span>
+            <span class="phase-badge">${r.phase}</span>
+            ${r.taskId ? `<span style="color:var(--muted);font-size:10px">${r.taskId.slice(0, 24)}…</span>` : ''}
+          </div>
+        </div>
+        <a href="${issueUrl(r.issueNumber)}" target="_blank" rel="noopener">#${r.issueNumber} ↗</a>
+      </div>
+    `).join('');
+  }
+
+  // History
+  const tbody = document.getElementById('history-body');
+  if (!history?.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty" style="padding:16px 14px">No runs recorded yet.</td></tr>';
+  } else {
+    tbody.innerHTML = history.map(r => `
+      <tr>
+        <td class="issue">
+          <a href="${issueUrl(r.issue_number)}" target="_blank" rel="noopener">
+            #${r.issue_number}
+          </a>
+        </td>
+        <td>${verdictChip(r.verdict)}</td>
+        <td>${diffChip(r.difficulty)}</td>
+        <td class="when">${relTime(r.attempted_at)}</td>
+        <td class="dur">${fmtDur(r.duration_ms)}</td>
+        <td class="err" title="${escHtml(r.error_message ?? '')}">
+          ${r.pr_url
+            ? `<a href="${escHtml(r.pr_url)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">PR ↗</a>`
+            : r.error_message
+              ? escHtml(r.error_message.slice(0, 80))
+              : '<span style="color:var(--muted)">—</span>'
+          }
+        </td>
+      </tr>
+    `).join('');
+  }
+
+  document.getElementById('last-updated').textContent = `Updated ${new Date().toLocaleTimeString()}`;
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Auto-refresh every 15s
+load();
+setInterval(load, 15_000);
+</script>
+</body>
+</html>
