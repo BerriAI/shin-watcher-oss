@@ -286,26 +286,16 @@ function appendReproStep(html, cls) {
   msgs.scrollTop = msgs.scrollHeight;
 }
 
-function ensureReproLivePanel(ev) {
-  clearReproLive();
-  watchTaskId = ev.taskId;
-  reproStartedAt = ev.startedAt || Date.now();
-  reproLivePanel = document.createElement('div');
-  reproLivePanel.className = 'repro-live';
-  reproLivePanel.dataset.taskId = ev.taskId;
-  const title = esc(ev.issueTitle || ('Issue #' + ev.issueNumber));
-  reproLivePanel.innerHTML =
-    '<div class="repro-live-head">' +
-      '<div><div class="repro-live-title">Reproduction run <span class="repro-live-issue">#' + esc(String(ev.issueNumber)) + '</span></div>' +
-      '<div class="repro-live-sub" title="' + title + '">' + title + '</div></div>' +
-      '<div class="repro-live-meta"><span class="repro-live-status">Running</span> · <span class="repro-live-elapsed">0s</span></div>' +
-    '</div>' +
-    '<div class="repro-live-agent-stream">' +
-      '<div class="repro-live-think"><div class="repro-live-think-label">Thinking</div><div class="repro-live-think-body"></div></div>' +
-      '<div class="repro-live-say"><div class="repro-live-say-label">Agent stream</div><div class="repro-live-agent-body">Waiting for the agent to emit text or choose a tool…</div></div>' +
-    '</div>' +
-    '<div class="repro-live-steps"></div>';
-  msgs.appendChild(reproLivePanel);
+function setReproStatus(text, cls) {
+  const st = reproLivePanel && reproLivePanel.querySelector('.repro-live-status');
+  if (!st) return;
+  st.textContent = text;
+  st.classList.remove('done');
+  if (cls) st.classList.add(cls);
+}
+
+function startReproTimer() {
+  if (reproTick) clearInterval(reproTick);
   const tick = () => {
     const el = reproLivePanel && reproLivePanel.querySelector('.repro-live-elapsed');
     if (!el) return;
@@ -314,8 +304,98 @@ function ensureReproLivePanel(ev) {
   };
   tick();
   reproTick = setInterval(tick, 1000);
-  appendReproStep('<span class="repro-live-tool">●</span> Run started — task <code>' + esc(ev.taskId.slice(0, 36)) + (ev.taskId.length > 36 ? '…' : '') + '</code>', 'run');
+}
+
+function ensureReproPendingPanel(info) {
+  clearReproLive();
+  watchTaskId = null;
+  reproStartedAt = Date.now();
+  const issue = info && info.issueNumber ? '#' + info.issueNumber : 'next eligible issue';
+  reproLivePanel = document.createElement('div');
+  reproLivePanel.className = 'repro-live';
+  reproLivePanel.dataset.taskId = 'pending';
+  reproLivePanel.dataset.sessionId = chatSessionId;
+  reproLivePanel.innerHTML =
+    '<div class="repro-live-head">' +
+      '<div><div class="repro-live-title">Preparing reproduction <span class="repro-live-issue">' + esc(issue) + '</span></div>' +
+      '<div class="repro-live-sub">Queued from this chat. Setting up worktree, proxy, and agent runtime…</div></div>' +
+      '<div class="repro-live-meta"><span class="repro-live-status">Preparing</span> · <span class="repro-live-elapsed">0s</span></div>' +
+    '</div>' +
+    '<div class="repro-live-agent-stream">' +
+      '<div class="repro-live-think"><div class="repro-live-think-label">Thinking</div><div class="repro-live-think-body"></div></div>' +
+      '<div class="repro-live-say"><div class="repro-live-say-label">Agent stream</div><div class="repro-live-agent-body">Queued. Waiting for the repro agent to finish setup and start streaming its worklog…</div></div>' +
+    '</div>' +
+    '<div class="repro-live-steps"></div>';
+  msgs.appendChild(reproLivePanel);
+  startReproTimer();
+  appendReproStep('<span class="repro-live-tool">●</span> Repro queued from chat', 'run');
+  appendReproStep('<span class="repro-live-tool">●</span> Preparing isolated clone and local proxy', 'run');
   msgs.scrollTop = msgs.scrollHeight;
+}
+
+function handleReproSetupEvent(ev) {
+  if (!liveEventForThisChat(ev)) return;
+  if (!reproLivePanel) ensureReproPendingPanel({ issueNumber: ev.issueNumber });
+  reproLivePanel.dataset.taskId = ev.taskId || 'pending';
+  watchTaskId = ev.taskId || watchTaskId;
+  const title = reproLivePanel.querySelector('.repro-live-title');
+  const sub = reproLivePanel.querySelector('.repro-live-sub');
+  const body = reproLivePanel.querySelector('.repro-live-agent-body');
+  if (title) title.innerHTML = 'Preparing reproduction <span class="repro-live-issue">#' + esc(String(ev.issueNumber)) + '</span>';
+  if (sub) sub.textContent = ev.issueTitle || 'Preparing run';
+  if (body) body.textContent = ev.message || 'Preparing repro agent…';
+  setReproStatus('Preparing');
+  appendReproStep('<span class="repro-live-tool">●</span> ' + esc(ev.message || 'Preparing'), 'run');
+}
+
+function handleReproSetupError(ev) {
+  if (!liveEventForThisChat(ev)) return;
+  if (!reproLivePanel) ensureReproPendingPanel({ issueNumber: ev.issueNumber });
+  reproLivePanel.dataset.taskId = ev.taskId || 'pending';
+  const body = reproLivePanel.querySelector('.repro-live-agent-body');
+  if (body) body.innerHTML = '<span style="color:var(--red)">Setup failed:</span> ' + esc(ev.error || 'unknown error');
+  setReproStatus('Failed', 'done');
+  appendReproStep('<span class="repro-live-tool">●</span> setup failed', 'err');
+}
+
+function ensureReproLivePanel(ev) {
+  clearReproLive();
+  watchTaskId = ev.taskId;
+  reproStartedAt = ev.startedAt || Date.now();
+  reproLivePanel = document.createElement('div');
+  reproLivePanel.className = 'repro-live';
+  reproLivePanel.dataset.taskId = ev.taskId;
+  const title = esc(ev.issueTitle || ('Issue #' + ev.issueNumber));
+  const setupPhase = ev.phase === 'setup';
+  reproLivePanel.innerHTML =
+    '<div class="repro-live-head">' +
+      '<div><div class="repro-live-title">' + (setupPhase ? 'Preparing reproduction' : 'Reproduction run') + ' <span class="repro-live-issue">#' + esc(String(ev.issueNumber)) + '</span></div>' +
+      '<div class="repro-live-sub" title="' + title + '">' + title + '</div></div>' +
+      '<div class="repro-live-meta"><span class="repro-live-status">' + (setupPhase ? 'Preparing' : 'Running') + '</span> · <span class="repro-live-elapsed">0s</span></div>' +
+    '</div>' +
+    '<div class="repro-live-agent-stream">' +
+      '<div class="repro-live-think"><div class="repro-live-think-label">Thinking</div><div class="repro-live-think-body"></div></div>' +
+      '<div class="repro-live-say"><div class="repro-live-say-label">Agent stream</div><div class="repro-live-agent-body">Waiting for the agent to emit text or choose a tool…</div></div>' +
+    '</div>' +
+    '<div class="repro-live-steps"></div>';
+  msgs.appendChild(reproLivePanel);
+  startReproTimer();
+  appendReproStep('<span class="repro-live-tool">●</span> ' + (setupPhase ? 'Run allocated' : 'Run started') + ' — task <code>' + esc(ev.taskId.slice(0, 36)) + (ev.taskId.length > 36 ? '…' : '') + '</code>', 'run');
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+function markReproAgentReady(ev) {
+  if (!liveEventForThisChat(ev)) return;
+  if (!reproLivePanel || reproLivePanel.dataset.taskId !== ev.taskId) {
+    ensureReproLivePanel(ev);
+    return;
+  }
+  const title = reproLivePanel.querySelector('.repro-live-title');
+  const body = reproLivePanel.querySelector('.repro-live-agent-body');
+  if (title) title.innerHTML = 'Reproduction run <span class="repro-live-issue">#' + esc(String(ev.issueNumber)) + '</span>';
+  if (body) body.textContent = 'Agent is ready. Waiting for its public worklog…';
+  setReproStatus('Running');
+  appendReproStep('<span class="repro-live-tool">●</span> Agent runtime ready', 'done');
 }
 
 function finishReproLivePanel(taskId) {
@@ -426,6 +506,7 @@ async function sendChat() {
         return;
       }
       addAssistant((j.reply || j.error || raw || 'HTTP ' + r.status).toString().slice(0, 2000));
+      if (j.repro === true) ensureReproPendingPanel(j);
       return;
     }
 
@@ -469,6 +550,7 @@ async function sendChat() {
             acc = j.reply != null ? j.reply : acc;
             span.innerHTML = md(acc);
             chatHistory.push({ role: 'assistant', content: acc });
+            if (j.repro === true) ensureReproPendingPanel(j);
             scroll();
           } else if (j.type === 'error' && !finalized) {
             finalized = true;
@@ -586,6 +668,18 @@ function connectSSE() {
   es = new EventSource('/live');
   es.onmessage = e => {
     const ev = JSON.parse(e.data);
+    if (ev.type === 'run_setup') {
+      handleReproSetupEvent(ev);
+      return;
+    }
+    if (ev.type === 'run_setup_error') {
+      handleReproSetupError(ev);
+      return;
+    }
+    if (ev.type === 'run_agent_ready') {
+      markReproAgentReady(ev);
+      return;
+    }
     if (ev.type === 'run_start') {
       loadRuns();
       if (liveEventForThisChat(ev)) {

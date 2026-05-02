@@ -6,8 +6,9 @@ import type { CandidateIssue } from "../picker.js";
 export interface ActiveRun {
   taskId: string;
   issue: CandidateIssue;
-  agent: Agent;
+  agent?: Agent;
   startedAt: number;
+  phase: "setup" | "agent";
   /** Dashboard chat session that queued this run (browser-generated UUID). */
   chatSessionId?: string;
 }
@@ -20,18 +21,13 @@ export interface LiveEvent {
 class LiveBusImpl extends EventEmitter {
   private activeRuns = new Map<string, ActiveRun>();
 
-  startRun(
-    taskId: string,
-    issue: CandidateIssue,
-    agent: Agent,
-    chatSessionId?: string
-  ): void {
+  beginRun(taskId: string, issue: CandidateIssue, chatSessionId?: string): void {
     const startedAt = Date.now();
     this.activeRuns.set(taskId, {
       taskId,
       issue,
-      agent,
       startedAt,
+      phase: "setup",
       chatSessionId,
     });
     this.emit("run_start", {
@@ -40,6 +36,69 @@ class LiveBusImpl extends EventEmitter {
       issueTitle: issue.title,
       issueUrl: issue.htmlUrl,
       startedAt,
+      phase: "setup",
+      session_id: chatSessionId ?? null,
+    });
+  }
+
+  setupRun(
+    taskId: string,
+    issue: CandidateIssue,
+    chatSessionId: string | undefined,
+    message: string
+  ): void {
+    this.emit("run_setup", {
+      type: "run_setup",
+      taskId,
+      issueNumber: issue.number,
+      issueTitle: issue.title,
+      issueUrl: issue.htmlUrl,
+      session_id: chatSessionId ?? null,
+      message,
+      ts: Date.now(),
+    });
+  }
+
+  setupError(
+    taskId: string,
+    issue: CandidateIssue,
+    chatSessionId: string | undefined,
+    error: string
+  ): void {
+    this.emit("run_setup_error", {
+      type: "run_setup_error",
+      taskId,
+      issueNumber: issue.number,
+      issueTitle: issue.title,
+      issueUrl: issue.htmlUrl,
+      session_id: chatSessionId ?? null,
+      error,
+      ts: Date.now(),
+    });
+  }
+
+  startRun(
+    taskId: string,
+    issue: CandidateIssue,
+    agent: Agent,
+    chatSessionId?: string
+  ): void {
+    if (!this.activeRuns.has(taskId)) {
+      this.beginRun(taskId, issue, chatSessionId);
+    }
+    const run = this.activeRuns.get(taskId);
+    if (run) {
+      run.agent = agent;
+      run.phase = "agent";
+    }
+    this.emit("run_agent_ready", {
+      type: "run_agent_ready",
+      taskId,
+      issueNumber: issue.number,
+      issueTitle: issue.title,
+      issueUrl: issue.htmlUrl,
+      startedAt: run?.startedAt ?? Date.now(),
+      phase: "agent",
       session_id: chatSessionId ?? null,
     });
   }

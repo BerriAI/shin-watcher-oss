@@ -60,6 +60,7 @@ export function startDashboard(runner: Runner, port = 3333): void {
         issueTitle: r.issue.title,
         issueUrl: r.issue.htmlUrl,
         startedAt: r.startedAt,
+        phase: r.phase,
       })),
     });
   });
@@ -102,17 +103,26 @@ export function startDashboard(runner: Runner, port = 3333): void {
     const onStart = (payload: object) => send({ type: "run_start", ...payload });
     const onEnd = (payload: object) => send({ type: "run_end", ...payload });
     const onNoIssue = () => send({ type: "no_eligible_issue" });
+    const onSetup = (payload: object) => send(payload);
+    const onSetupError = (payload: object) => send(payload);
+    const onAgentReady = (payload: object) => send(payload);
 
     LiveBus.on("agent_event", onEvent);
     LiveBus.on("run_start", onStart);
     LiveBus.on("run_end", onEnd);
     LiveBus.on("no_eligible_issue", onNoIssue);
+    LiveBus.on("run_setup", onSetup);
+    LiveBus.on("run_setup_error", onSetupError);
+    LiveBus.on("run_agent_ready", onAgentReady);
 
     const cleanup = () => {
       LiveBus.off("agent_event", onEvent);
       LiveBus.off("run_start", onStart);
       LiveBus.off("run_end", onEnd);
       LiveBus.off("no_eligible_issue", onNoIssue);
+      LiveBus.off("run_setup", onSetup);
+      LiveBus.off("run_setup_error", onSetupError);
+      LiveBus.off("run_agent_ready", onAgentReady);
     };
     req.on("close", cleanup);
   });
@@ -271,7 +281,7 @@ export function startDashboard(runner: Runner, port = 3333): void {
       return res.json({ ok: false, message: "No active run to interrupt." });
     }
     for (const run of active) {
-      run.agent.abort();
+      run.agent?.abort();
     }
     res.json({ ok: true, interrupted: active.map((r) => r.taskId) });
   });
@@ -290,6 +300,9 @@ export function startDashboard(runner: Runner, port = 3333): void {
     const run = taskId
       ? active.find((r) => r.taskId === taskId) ?? active[0]!
       : active[0]!;
+    if (!run.agent) {
+      return res.status(409).json({ error: "Run is still setting up; agent is not ready." });
+    }
     run.agent.prompt(message).catch(() => {});
 
     // Emit the steer as a synthetic event so it appears in the chat
@@ -355,8 +368,12 @@ function requireDashboardAuth(
     return;
   }
 
-  const acceptsHtml = req.accepts(["html", "json"]) === "html";
-  if (acceptsHtml && req.method === "GET") {
+  const browserPage =
+    req.method === "GET" &&
+    !req.path.startsWith("/api/") &&
+    req.path !== "/live" &&
+    !req.path.startsWith("/runs/");
+  if (browserPage) {
     res.redirect("/login");
     return;
   }

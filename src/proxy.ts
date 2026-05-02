@@ -70,7 +70,7 @@ export interface StartProxyOptions {
 }
 
 /**
- * Start `uv run litellm --config proxy_server_config.yaml --port <port>` from inside
+ * Start `uv run --extra proxy litellm --config proxy_server_config.yaml --port <port>` from inside
  * the prepared workdir. Resolves once /health/readiness returns 200, rejects on timeout.
  *
  * The returned handle's stop() will SIGTERM the process group and unlink the log file.
@@ -91,6 +91,8 @@ export async function startProxy(opts: StartProxyOptions): Promise<ProxyHandle> 
     "uv",
     [
       "run",
+      "--extra",
+      "proxy",
       "litellm",
       "--config",
       "proxy_server_config.yaml",

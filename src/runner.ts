@@ -94,7 +94,10 @@ export class Runner {
       bundle?.agent.abort();
     }, timeoutMs);
 
+    LiveBus.beginRun(taskId, issue, opts?.chatSessionId);
+
     try {
+      LiveBus.setupRun(taskId, issue, opts?.chatSessionId, "Preparing isolated worktree");
       // 1. Prepare working tree — each run gets its own isolated clone so
       //    concurrent runs don't clobber each other's git state.
       const workdir = prepareWorkdir({
@@ -102,6 +105,7 @@ export class Runner {
         ref: "main",
       });
 
+      LiveBus.setupRun(taskId, issue, opts?.chatSessionId, "Checking GitHub fork / remotes");
       // 2. Make sure the bot fork exists and is configured as a git remote
       //    inside the workdir, so the agent can `git push shin-bot ...`.
       if (fixEnabled) {
@@ -109,6 +113,7 @@ export class Runner {
         ensureBotRemote(workdir);
       }
 
+      LiveBus.setupRun(taskId, issue, opts?.chatSessionId, "Starting local LiteLLM proxy");
       // 3. Start the local litellm proxy on an allocated port (unique per run).
       const proxyPort = allocatePort();
       proxy = await startProxy({
@@ -121,6 +126,7 @@ export class Runner {
         logPath: proxyLogPath,
       });
 
+      LiveBus.setupRun(taskId, issue, opts?.chatSessionId, "Creating repro agent");
       // 4. Build and prompt the agent.
       const systemPrompt = buildReproSystemPrompt({
         issue,
@@ -169,6 +175,9 @@ export class Runner {
     } catch (e) {
       errorMessage = (e as Error).message;
       console.error(`[runner] error: ${errorMessage}`);
+      if (!bundle) {
+        LiveBus.setupError(taskId, issue, opts?.chatSessionId, errorMessage);
+      }
     } finally {
       clearTimeout(timeoutHandle);
       LiveBus.endRun(taskId);
