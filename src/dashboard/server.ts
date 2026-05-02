@@ -5,14 +5,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import { LiveBus, type LiveEvent } from "./live.js";
-import type { Runner } from "../runner.js";
+import { SessionManager, awaitSessionAgent } from "./session.js";
 import { config } from "../config.js";
-import { dashboardChatTurn, dashboardChatTurnStream } from "./chatLlm.js";
+import type { AgentEvent } from "@mariozechner/pi-agent-core";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.join(__dirname, "ui");
 
-export function startDashboard(runner: Runner, port = 3333): void {
+export function startDashboard(port = 3333): void {
   const app = express();
   app.use(express.json());
   app.use(express.urlencoded({ extended: false }));
@@ -131,169 +131,139 @@ export function startDashboard(runner: Runner, port = 3333): void {
   });
 
   /**
-   * Free-form chat via LiteLLM. The model decides (via tool `start_issue_reproduction`)
-   * whether to start a repro run; no regex routing on the user message.
+   * Free-form chat via the root agent.  The agent decides autonomously whether
+   * to answer in plain text or launch a full repro run.  Text deltas are
+   * streamed back as SSE.  When the agent calls begin_repro_run the HTTP
+   * response finishes immediately (repro continues in background).
    */
   app.post("/api/chat", async (req, res) => {
     const body = req.body as {
       messages?: Array<{ role: string; content: string }>;
-      stream?: boolean;
-      /** Browser-generated id for this chat tab/session; ties Live SSE to the right UI. */
+      /** Browser-generated id for this chat tab/session. */
       session_id?: string;
     };
     const chatSessionId =
       typeof body.session_id === "string" && body.session_id.trim() !== ""
         ? body.session_id.trim()
-        : undefined;
+        : `anon-${Date.now()}`;
+
     const msgs = body.messages;
-    if (!msgs?.length) {
-      return res.status(400).json({ error: "messages required" });
-    }
+    if (!msgs?.length) return res.status(400).json({ error: "messages required" });
     const last = msgs[msgs.length - 1];
-    if (last?.role !== "user") {
-      return res.status(400).json({ error: "last message must be user" });
-    }
+    if (last?.role !== "user") return res.status(400).json({ error: "last message must be user" });
 
-    const linear = msgs
-      .filter((m) => m.role === "user" || m.role === "assistant")
-      .map((m) => ({
-        role: m.role as "user" | "assistant",
-        content: m.content,
-      }));
+    const userMessage = last.content;
 
-    const queueRepro = (repro: NonNullable<Awaited<ReturnType<typeof dashboardChatTurn>>["repro"]>) => {
-      setImmediate(async () => {
-        try {
-          const result = await runner.runOne(repro.pickNextEligible ? undefined : repro.issueNumber, {
-            chatSessionId,
-          });
-          if (!result) LiveBus.emit("no_eligible_issue", {});
-        } catch (e) {
-          console.error("[dashboard] chat repro error:", e);
-        }
-      });
+    // Always stream — the session agent produces real-time events.
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.flushHeaders();
+
+    const send = (obj: object) => {
+      if (!res.writableEnded) res.write(`data: ${JSON.stringify(obj)}\n\n`);
     };
 
-    if (body.stream === true) {
-      res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
-      res.setHeader("Cache-Control", "no-cache");
-      res.setHeader("Connection", "keep-alive");
-      res.flushHeaders();
-      const ac = new AbortController();
-      const onClientGone = () => {
-        if (!res.writableEnded) ac.abort();
-      };
-      res.on("close", onClientGone);
-      const send = (obj: object) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
-      let sentDelta = false;
-      try {
-        const { reply, repro } = await dashboardChatTurnStream(linear, (chunk) => {
-          sentDelta = true;
-          send({ type: "delta", text: chunk });
-        }, { signal: ac.signal });
-        if (repro) queueRepro(repro);
-        send({
-          type: "done",
-          reply,
-          repro: repro != null,
-          issueNumber: repro?.issueNumber ?? null,
-          pickNext: repro?.pickNextEligible ?? false,
-          session_id: chatSessionId ?? null,
-        });
-      } catch (e) {
-        const msg = (e as Error).message;
-        console.error("[dashboard] chat stream error:", msg);
-        if (!sentDelta && /terminated|UND_ERR|fetch failed/i.test(msg)) {
-          try {
-            const { reply, repro } = await dashboardChatTurn(linear);
-            if (repro) queueRepro(repro);
-            send({
-              type: "done",
-              reply,
-              repro: repro != null,
-              issueNumber: repro?.issueNumber ?? null,
-              pickNext: repro?.pickNextEligible ?? false,
-              session_id: chatSessionId ?? null,
-            });
-            return;
-          } catch (fallbackError) {
-            const fallbackMsg = (fallbackError as Error).message;
-            console.error("[dashboard] chat fallback error:", fallbackMsg);
-            send({ type: "error", message: fallbackMsg });
-            return;
-          }
-        }
-        send({ type: "error", message: msg });
-      } finally {
-        res.off("close", onClientGone);
-        res.end();
-      }
+    let detachedForRepro = false;
+    let replyAcc = "";
+
+    // Get (or lazily create) the session's root agent.
+    let agent;
+    try {
+      const session = SessionManager.getOrCreate(chatSessionId);
+      session.lastActivityAt = Date.now();
+      agent = await awaitSessionAgent(session);
+    } catch (e) {
+      send({ type: "error", message: `Session init failed: ${(e as Error).message}` });
+      res.end();
       return;
     }
 
-    try {
-      const { reply, repro } = await dashboardChatTurn(linear);
+    // Subscribe to agent events for the duration of this HTTP request.
+    // We keep forwarding=true until the request closes or repro detaches.
+    let forwarding = true;
+    const session = SessionManager.getOrCreate(chatSessionId);
 
-      if (repro) {
-        queueRepro(repro);
-        return res.json({
-          reply,
-          repro: true,
-          issueNumber: repro.issueNumber ?? null,
-          pickNext: repro.pickNextEligible,
-          session_id: chatSessionId ?? null,
-        });
+    agent.subscribe((event: AgentEvent) => {
+      if (!forwarding) return;
+      const ev = event as Record<string, unknown>;
+
+      // Stream text deltas to the client.
+      if (ev["type"] === "message_update") {
+        const ae = ev["assistantMessageEvent"] as Record<string, unknown> | undefined;
+        if (ae?.["type"] === "text_delta" && typeof ae["delta"] === "string") {
+          replyAcc += ae["delta"];
+          send({ type: "delta", text: ae["delta"] });
+        }
       }
 
-      return res.json({ reply, repro: false, session_id: chatSessionId ?? null });
+      // When the agent calls begin_repro_run, the repro runs in background.
+      // Close the HTTP response immediately so the chat bubble resolves.
+      if (ev["type"] === "tool_call" && ev["name"] === "begin_repro_run" && !detachedForRepro) {
+        detachedForRepro = true;
+        forwarding = false;
+        send({
+          type: "done",
+          reply: replyAcc || "Starting reproduction — follow the live panel for progress.",
+          repro: true,
+          session_id: chatSessionId,
+        });
+        res.end();
+      }
+    });
+
+    const ac = new AbortController();
+    res.on("close", () => {
+      forwarding = false;
+      if (!detachedForRepro) ac.abort();
+    });
+
+    try {
+      // agent.prompt() resolves when the current turn is complete.
+      // If a repro was started it will continue running after prompt() returns.
+      await (agent as unknown as { prompt: (msg: string, opts?: { signal?: AbortSignal }) => Promise<void> })
+        .prompt(userMessage);
     } catch (e) {
       const msg = (e as Error).message;
-      console.error("[dashboard] chat error:", msg);
-      return res.status(500).json({
-        reply: `Sorry — chat failed: ${msg}`,
-        repro: false,
-        error: msg,
+      if (!detachedForRepro && !res.writableEnded) {
+        send({ type: "error", message: msg });
+      }
+    } finally {
+      forwarding = false;
+    }
+
+    if (!detachedForRepro && !res.writableEnded) {
+      send({
+        type: "done",
+        reply: replyAcc || "(no reply)",
+        repro: !!session.currentTaskId,
+        session_id: chatSessionId,
       });
+      res.end();
     }
   });
 
   // ── POST: invoke ──────────────────────────────────────────────────────────
-  // Accepts: issue number, GitHub URL, "next", or any freeform text.
-  // Freeform text → picks next eligible issue and steers the agent with the message.
+  // Accepts: issue number, GitHub URL, or any freeform command.
+  // Routes the text directly to the root session agent (which decides what to do).
 
   app.post("/api/invoke", async (req, res) => {
     const { command, steerMessage } = req.body as { command?: string; steerMessage?: string };
     const raw = (command ?? "").trim();
 
-    // Parse issue number from URL or #N notation
-    const issueNumber = parseIssueNumber(raw);
-    const fix = /\bfix\b/i.test(raw);
+    res.json({ queued: true, command: raw });
 
-    res.json({ queued: true, issueNumber: issueNumber ?? null });
-
+    const sessionId = `invoke-${Date.now()}`;
     setImmediate(async () => {
-      if (fix) process.env["AUTO_FIX"] = "true";
       try {
-        // Hook into run_start to inject the steer message once the agent begins.
-        if (steerMessage) {
-          const onStart = (payload: { taskId: string }) => {
-            LiveBus.off("run_start", onStart);
-            setTimeout(() => {
-              const agent = LiveBus.getAgent(payload.taskId);
-              if (agent) agent.prompt(steerMessage).catch(() => {});
-            }, 2000);
-          };
-          LiveBus.on("run_start", onStart);
-        }
-        const result = await runner.runOne(issueNumber ?? undefined);
-        if (!result) {
-          // No eligible issue — emit a synthetic event so the UI knows
-          LiveBus.emit("no_eligible_issue", {});
-        }
+        const session = SessionManager.getOrCreate(sessionId);
+        const agent = await awaitSessionAgent(session);
+        const msg = steerMessage
+          ? `${raw}\n\nAdditional context: ${steerMessage}`
+          : raw || "Pick the next eligible open bug and reproduce it.";
+        await (agent as unknown as { prompt: (m: string) => Promise<void> }).prompt(msg);
       } catch (e) {
         console.error("[dashboard] invoke error:", e);
-      } finally {
-        if (fix) delete process.env["AUTO_FIX"];
       }
     });
   });
@@ -371,9 +341,9 @@ export function startDashboard(runner: Runner, port = 3333): void {
   });
 }
 
-// Parse a GitHub issue number from various input formats:
-//   #12345 | 12345 | https://github.com/BerriAI/litellm/issues/12345 | run #12345
-function parseIssueNumber(input: string): number | null {
+// Parse a GitHub issue number from various input formats — kept for future use.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function _parseIssueNumber(input: string): number | null {
   // GitHub URL
   const urlMatch = input.match(/github\.com\/[^/]+\/[^/]+\/issues\/(\d+)/);
   if (urlMatch) return parseInt(urlMatch[1] as string, 10);

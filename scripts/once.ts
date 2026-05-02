@@ -1,16 +1,16 @@
 #!/usr/bin/env tsx
 /**
  * Start the shin-watcher chat UI at http://localhost:3333.
- * Optionally run one issue immediately:
- *   tsx scripts/once.ts            → open chat, idle until you invoke via UI
- *   tsx scripts/once.ts --issue 9876 → auto-start that issue then stay alive
- *   tsx scripts/once.ts --next       → auto-start next eligible then stay alive
+ * Optionally kick off a repro immediately by passing text to the root agent:
+ *   tsx scripts/once.ts                       → open chat, idle until you invoke via UI
+ *   tsx scripts/once.ts --issue 9876          → agent gets "Reproduce issue #9876"
+ *   tsx scripts/once.ts --next                → agent gets "Pick and reproduce the next eligible bug"
  *
- * The server stays alive after the run so you can invoke more runs from the chat.
+ * The server stays alive after the run so you can invoke more via the chat.
  * Ctrl-C to quit.
  */
-import { Runner } from "../src/runner.js";
 import { startDashboard } from "../src/dashboard/server.js";
+import { SessionManager, awaitSessionAgent } from "../src/dashboard/session.js";
 
 function parseArgs(): { issueNumber?: number; runNext?: boolean } {
   const args = process.argv.slice(2);
@@ -25,19 +25,26 @@ function parseArgs(): { issueNumber?: number; runNext?: boolean } {
 
 async function main(): Promise<void> {
   const { issueNumber, runNext } = parseArgs();
-  const runner = new Runner();
-  startDashboard(runner, 3333);
+  startDashboard(3333);
 
-  // If invoked with --issue or --next, kick off immediately; then stay alive.
   if (issueNumber !== undefined || runNext) {
-    const summary = await runner.runOne(issueNumber).catch((e) => {
-      console.error("[once] run error:", e);
+    const msg = issueNumber
+      ? `Reproduce issue #${issueNumber} on BerriAI/litellm.`
+      : "Pick the next eligible open bug on BerriAI/litellm and reproduce it.";
+
+    const session = SessionManager.getOrCreate("cli-once");
+    const agent = await awaitSessionAgent(session, 90_000).catch((e) => {
+      console.error("[once] agent init error:", e);
       return null;
     });
-    if (summary) console.log("[once] done:", JSON.stringify(summary));
+
+    if (agent) {
+      (agent as unknown as { prompt: (m: string) => Promise<void> })
+        .prompt(msg)
+        .catch((e) => console.error("[once] prompt error:", e));
+    }
   }
 
-  // Keep the server alive indefinitely so the chat UI stays reachable.
   console.log("  Waiting for commands via http://localhost:3333  (Ctrl-C to quit)\n");
   process.stdin.resume();
 }

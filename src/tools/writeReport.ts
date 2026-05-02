@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Type, type Static } from "typebox";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
+import { config } from "../config.js";
 
 const VerdictEnum = Type.Union(
   [
@@ -107,20 +108,35 @@ const WriteReportParams = Type.Object({
         "Free-form notes: assumptions made, env quirks, anything a maintainer should know.",
     })
   ),
+  task_id: Type.Optional(
+    Type.String({
+      description:
+        "The taskId returned by begin_repro_run. When provided, the report is written to runs/{task_id}/report.md.",
+    })
+  ),
 });
 
 export type ReportPayload = Static<typeof WriteReportParams>;
 
 export interface WriteReportToolOptions {
-  /** Path the agent should write report.md to. */
+  /**
+   * Default path the agent should write report.md to. Ignored when the
+   * payload includes `task_id` (which resolves to runs/{task_id}/report.md).
+   */
   reportPath: string;
-  /** Called with the parsed payload so the runner can persist + post it. */
-  onReport: (payload: ReportPayload) => void;
+  /**
+   * Called with the parsed payload so the caller can persist + post it.
+   * Second arg is the resolved taskId (from payload.task_id or undefined).
+   */
+  onReport: (payload: ReportPayload, taskId?: string) => void;
 }
 
 /**
  * The agent calls this tool exactly once when it's done. It serializes the
- * payload to a markdown report at `reportPath` and signals the runner.
+ * payload to a markdown report and signals the caller.
+ *
+ * If payload.task_id is provided (set by begin_repro_run), the report is
+ * written to runs/{task_id}/report.md regardless of opts.reportPath.
  *
  * Returning `terminate: true` hints to pi-agent-core that no follow-up LLM call
  * is needed — the run can wind down.
@@ -133,22 +149,25 @@ export function makeWriteReportTool(
     label: "Write Report",
     description:
       "MANDATORY FINAL TOOL. Call this exactly once at the end of the run with the structured " +
-      "report. Writes report.md to the run directory and ends the agent loop. " +
+      "report. Pass the task_id returned by begin_repro_run so the report lands in the correct directory. " +
       "The verdict (0-5) goes at the very top of the rendered markdown.",
     parameters: WriteReportParams,
     execute: async (_id, payload) => {
+      const resolvedPath = payload.task_id
+        ? path.join(config.paths.runs, payload.task_id, "report.md")
+        : opts.reportPath;
       const md = renderReportMarkdown(payload);
-      fs.mkdirSync(path.dirname(opts.reportPath), { recursive: true });
-      fs.writeFileSync(opts.reportPath, md, "utf-8");
-      opts.onReport(payload);
+      fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
+      fs.writeFileSync(resolvedPath, md, "utf-8");
+      opts.onReport(payload, payload.task_id ?? undefined);
       return {
         content: [
           {
             type: "text" as const,
-            text: `Report written to ${opts.reportPath} with verdict ${payload.verdict}/5.`,
+            text: `Report written to ${resolvedPath} with verdict ${payload.verdict}/5.`,
           },
         ],
-        details: { reportPath: opts.reportPath, verdict: payload.verdict },
+        details: { reportPath: resolvedPath, verdict: payload.verdict },
         terminate: true,
       };
     },
