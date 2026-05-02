@@ -40,14 +40,40 @@ interface MountedServer {
   transport: StdioClientTransport;
 }
 
+const MCP_CONNECT_TIMEOUT_MS = 30_000;
+const MCP_MAX_ATTEMPTS = 3;
+
 export class McpBridge {
   private servers: MountedServer[] = [];
 
   /**
-   * Spawn an MCP server, list its tools, return them wrapped as AgentTools.
-   * Prefixes every tool name with `<server>_` so multiple servers can coexist.
+   * Spawn an MCP server with retry+timeout. Returns empty tool list if all
+   * attempts fail (degraded mode) so the agent can still run without that MCP.
    */
   async connect(config: McpServerConfig): Promise<AgentTool[]> {
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= MCP_MAX_ATTEMPTS; attempt++) {
+      try {
+        return await this._connectOnce(config);
+      } catch (e) {
+        lastErr = e;
+        const delay = attempt * 2_000;
+        console.warn(
+          `[mcp:${config.name}] connect attempt ${attempt}/${MCP_MAX_ATTEMPTS} failed (${String(e)}); retrying in ${delay}ms`
+        );
+        if (attempt < MCP_MAX_ATTEMPTS) {
+          await new Promise((r) => setTimeout(r, delay));
+        }
+      }
+    }
+    console.error(
+      `[mcp:${config.name}] all ${MCP_MAX_ATTEMPTS} connect attempts failed — running without these tools. Last error:`,
+      lastErr
+    );
+    return []; // degraded: agent continues without this server's tools
+  }
+
+  private async _connectOnce(config: McpServerConfig): Promise<AgentTool[]> {
     const transport = new StdioClientTransport({
       command: config.command,
       args: config.args,
@@ -58,7 +84,17 @@ export class McpBridge {
       { name: "shin-watcher", version: "0.1.0" },
       { capabilities: {} }
     );
-    await client.connect(transport);
+
+    // Race the connect against a timeout so a hung npx download doesn't block forever.
+    await Promise.race([
+      client.connect(transport),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`MCP connect timeout after ${MCP_CONNECT_TIMEOUT_MS}ms`)),
+          MCP_CONNECT_TIMEOUT_MS
+        )
+      ),
+    ]);
 
     // Surface server stderr to our process stderr — invaluable when an MCP
     // server crashes on startup.

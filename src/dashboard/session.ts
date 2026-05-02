@@ -266,6 +266,10 @@ class SessionManagerImpl {
         agentPromise = buildAgent().then((a) => {
           resolvedAgent = a;
           return a;
+        }).catch((e) => {
+          // Clear so the next call retries rather than returning a forever-rejected promise.
+          agentPromise = null;
+          throw e;
         });
       }
       return agentPromise;
