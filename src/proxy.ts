@@ -78,17 +78,42 @@ export interface StartProxyOptions {
   databaseUrl?: string;
   /** Path to write proxy stdout+stderr. */
   logPath: string;
-  /** How long to wait for /health/readiness in ms (default 90s). */
+  /** How long to wait for /health/readiness per attempt in ms (default 90s). */
   readinessTimeoutMs?: number;
+  /** Max attempts before giving up (default 3). */
+  maxAttempts?: number;
+  /** Called before each retry so callers can emit progress events. */
+  onRetry?: (attempt: number, maxAttempts: number, shortError: string) => void;
 }
 
 /**
  * Start `uv run --extra proxy litellm --config proxy_server_config.yaml --port <port>` from inside
- * the prepared workdir. Resolves once /health/readiness returns 200, rejects on timeout.
- *
- * The returned handle's stop() will SIGTERM the process group and unlink the log file.
+ * the prepared workdir. Resolves once /health/readiness returns 200.
+ * Retries up to maxAttempts (default 3) on timeout, calling onRetry between attempts.
  */
 export async function startProxy(opts: StartProxyOptions): Promise<ProxyHandle> {
+  const maxAttempts = opts.maxAttempts ?? 3;
+  let lastError = "unknown";
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (attempt > 1 && opts.onRetry) {
+      opts.onRetry(attempt, maxAttempts, lastError);
+    }
+
+    try {
+      return await startProxyOnce(opts);
+    } catch (e) {
+      lastError = firstMeaningfulLine((e as Error).message);
+      if (attempt === maxAttempts) break;
+      console.warn(`[proxy] attempt ${attempt}/${maxAttempts} failed: ${lastError} — retrying`);
+      await new Promise((r) => setTimeout(r, 3_000));
+    }
+  }
+
+  throw new Error(`LiteLLM proxy failed after ${maxAttempts} attempts. Last error: ${lastError}`);
+}
+
+async function startProxyOnce(opts: StartProxyOptions): Promise<ProxyHandle> {
   fs.mkdirSync(path.dirname(opts.logPath), { recursive: true });
   const out = fs.openSync(opts.logPath, "w");
 
@@ -116,7 +141,7 @@ export async function startProxy(opts: StartProxyOptions): Promise<ProxyHandle> 
       cwd: opts.workdir,
       env,
       stdio: ["ignore", out, out],
-      detached: true, // own process group so we can SIGTERM the whole tree
+      detached: true,
     }
   );
 
@@ -157,7 +182,6 @@ export async function startProxy(opts: StartProxyOptions): Promise<ProxyHandle> 
       } catch {
         /* already gone */
       }
-      // give it 5s to drain, then SIGKILL
       await new Promise((r) => setTimeout(r, 5_000));
       try {
         process.kill(-pid, "SIGKILL");
@@ -171,6 +195,12 @@ export async function startProxy(opts: StartProxyOptions): Promise<ProxyHandle> 
       }
     },
   };
+}
+
+/** Return just the first non-empty, non-separator line from an error message. */
+function firstMeaningfulLine(msg: string): string {
+  const line = msg.split("\n").find((l) => l.trim() && !l.startsWith("---"));
+  return (line ?? msg).slice(0, 200);
 }
 
 async function waitForReadiness(url: string, timeoutMs: number): Promise<boolean> {

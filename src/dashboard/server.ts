@@ -106,6 +106,7 @@ export function startDashboard(runner: Runner, port = 3333): void {
     const onSetup = (payload: object) => send(payload);
     const onSetupError = (payload: object) => send(payload);
     const onAgentReady = (payload: object) => send(payload);
+    const onPlan = (payload: object) => send(payload);
 
     LiveBus.on("agent_event", onEvent);
     LiveBus.on("run_start", onStart);
@@ -114,6 +115,7 @@ export function startDashboard(runner: Runner, port = 3333): void {
     LiveBus.on("run_setup", onSetup);
     LiveBus.on("run_setup_error", onSetupError);
     LiveBus.on("run_agent_ready", onAgentReady);
+    LiveBus.on("run_plan", onPlan);
 
     const cleanup = () => {
       LiveBus.off("agent_event", onEvent);
@@ -123,6 +125,7 @@ export function startDashboard(runner: Runner, port = 3333): void {
       LiveBus.off("run_setup", onSetup);
       LiveBus.off("run_setup_error", onSetupError);
       LiveBus.off("run_agent_ready", onAgentReady);
+      LiveBus.off("run_plan", onPlan);
     };
     req.on("close", cleanup);
   });

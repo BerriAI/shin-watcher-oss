@@ -121,10 +121,10 @@ class LiveBusImpl extends EventEmitter {
     });
   }
 
-  endRun(taskId: string): void {
+  endRun(taskId: string, verdict?: number, verdictReasoning?: string): void {
     const session_id = this.activeRuns.get(taskId)?.chatSessionId ?? null;
     this.activeRuns.delete(taskId);
-    this.emit("run_end", { taskId, type: "run_end", session_id });
+    this.emit("run_end", { taskId, type: "run_end", session_id, verdict: verdict ?? null, verdictReasoning: verdictReasoning ?? null });
   }
 
   pushEvent(taskId: string, event: AgentEvent): void {

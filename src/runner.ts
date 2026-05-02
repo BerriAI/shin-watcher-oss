@@ -125,6 +125,14 @@ export class Runner {
         uiPassword: config.proxy.uiPassword,
         databaseUrl: config.proxy.sandboxDbUrl || undefined,
         logPath: proxyLogPath,
+        onRetry: (attempt, maxAttempts, shortError) => {
+          LiveBus.setupRun(
+            taskId,
+            issue,
+            opts?.chatSessionId,
+            `Proxy not ready yet (attempt ${attempt}/${maxAttempts}): ${shortError} — retrying…`
+          );
+        },
       });
 
       LiveBus.setupRun(taskId, issue, opts?.chatSessionId, "Creating repro agent");
@@ -181,7 +189,7 @@ export class Runner {
       }
     } finally {
       clearTimeout(timeoutHandle);
-      LiveBus.endRun(taskId);
+      LiveBus.endRun(taskId, payload?.verdict, payload?.verdict_reasoning);
       try {
         await proxy?.stop();
       } catch {

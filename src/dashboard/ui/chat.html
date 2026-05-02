@@ -371,7 +371,9 @@ function handleReproSetupError(ev) {
   if (!reproLivePanel) ensureReproPendingPanel({ issueNumber: ev.issueNumber });
   reproLivePanel.dataset.taskId = ev.taskId || 'pending';
   const body = reproLivePanel.querySelector('.repro-live-agent-body');
-  if (body) body.innerHTML = '<span style="color:var(--red)">Setup failed:</span> ' + esc(ev.error || 'unknown error');
+  // Show just the first meaningful line, not a full stack trace
+  const shortErr = (ev.error || 'unknown error').split('\n').find(l => l.trim() && !l.startsWith('---')) || ev.error;
+  if (body) body.innerHTML = '<span style="color:var(--red)">Setup failed:</span> ' + esc((shortErr || ev.error || 'unknown').slice(0, 300));
   setReproStatus('Failed', 'done');
   appendReproStep('<span class="repro-live-tool">●</span> setup failed', 'err');
 }
@@ -416,7 +418,7 @@ function markReproAgentReady(ev) {
   appendReproStep('<span class="repro-live-tool">●</span> Agent runtime ready', 'done');
 }
 
-function finishReproLivePanel(taskId) {
+function finishReproLivePanel(taskId, verdict, verdictReasoning) {
   if (!reproLivePanel || reproLivePanel.dataset.taskId !== taskId) return;
   if (reproTick) {
     clearInterval(reproTick);
@@ -426,6 +428,18 @@ function finishReproLivePanel(taskId) {
   if (st) {
     st.textContent = 'Finished';
     st.classList.add('done');
+  }
+  if (verdict != null) {
+    const VERDICT_LABEL = ['Unreproducible','Setup failed','Partial','Similar symptoms','Reproduced','Fully validated'];
+    const VERDICT_COLOR = ['var(--muted)','var(--red)','#fbbf24','#fbbf24','var(--green)','var(--cyan)'];
+    const label = VERDICT_LABEL[verdict] || 'Unknown';
+    const color = VERDICT_COLOR[verdict] || 'var(--muted)';
+    const chip = document.createElement('div');
+    chip.style.cssText = `margin:8px 12px 0;padding:7px 10px;border-radius:6px;background:rgba(255,255,255,0.04);border-left:3px solid ${color};font-size:12px;`;
+    chip.innerHTML = `<span style="font-weight:700;color:${color}">${verdict}/5 — ${esc(label)}</span>` +
+      (verdictReasoning ? `<div style="margin-top:4px;color:var(--text);opacity:.8;">${esc(verdictReasoning)}</div>` : '');
+    const steps = reproLivePanel.querySelector('.repro-live-steps');
+    if (steps) steps.prepend(chip);
   }
   appendReproStep('<span class="repro-live-tool">●</span> Run ended — see sidebar for verdict.', 'done');
   msgs.scrollTop = msgs.scrollHeight;
@@ -713,7 +727,7 @@ function connectSSE() {
     }
     if (ev.type === 'run_end') {
       if (liveEventForThisChat(ev)) {
-        finishReproLivePanel(ev.taskId);
+        finishReproLivePanel(ev.taskId, ev.verdict, ev.verdictReasoning);
         lastMsgUpdateLine = null;
       }
       loadRuns();
