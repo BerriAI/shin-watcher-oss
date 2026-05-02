@@ -19,6 +19,9 @@ const UI_DIR = path.join(__dirname, "ui");
  * per issue. Issues are sent sequentially with a short stagger so they don't
  * all try to clone + boot a proxy at the same instant.
  */
+/** Unix ms timestamp of when the next scheduled batch will fire. 0 = scheduler disabled. */
+let nextBatchAt = 0;
+
 async function runBatch(batchSize: number): Promise<void> {
   const state = new State(config.paths.stateDb);
   const picker = new Picker(
@@ -131,16 +134,22 @@ export function startDashboard(port = 3333): void {
       );
       const issues = await picker.pickBatch(15);
       state.close();
-      res.json(
-        issues.map((i) => ({
+      const STAGGER_MS = 10_000; // 10s between each issue start within a batch
+      res.json({
+        nextBatchAt: nextBatchAt || null,
+        batchSize: config.schedule.batchSize,
+        schedulerEnabled: config.schedule.batchIntervalMin > 0,
+        issues: issues.map((i, idx) => ({
           number: i.number,
           title: i.title,
           htmlUrl: i.htmlUrl,
           author: i.author,
           labels: i.labels,
           createdAt: i.createdAt,
-        }))
-      );
+          // When this issue is expected to start within the next batch.
+          expectedAt: nextBatchAt ? nextBatchAt + idx * STAGGER_MS : null,
+        })),
+      });
     } catch (e) {
       res.status(500).json({ error: String(e) });
     }
@@ -464,14 +473,18 @@ export function startDashboard(port = 3333): void {
   // fires a repro session for each on that cadence. No external trigger needed.
 
   if (config.schedule.batchIntervalMin > 0) {
+    const intervalMs = config.schedule.batchIntervalMin * 60_000;
     const runScheduledBatch = () => {
+      nextBatchAt = Date.now() + intervalMs;
       runBatch(config.schedule.batchSize).catch((e) =>
         console.error("[scheduler] batch error:", e)
       );
     };
     // Fire once shortly after startup, then on interval.
-    setTimeout(runScheduledBatch, 30_000);
-    setInterval(runScheduledBatch, config.schedule.batchIntervalMin * 60_000);
+    const firstFireMs = 30_000;
+    nextBatchAt = Date.now() + firstFireMs;
+    setTimeout(runScheduledBatch, firstFireMs);
+    setInterval(runScheduledBatch, intervalMs);
     console.log(
       `  Scheduler   →  every ${config.schedule.batchIntervalMin}m, ${config.schedule.batchSize} issues/batch\n`
     );

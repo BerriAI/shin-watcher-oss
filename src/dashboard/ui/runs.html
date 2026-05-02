@@ -288,14 +288,29 @@ async function loadUpcoming() {
   grid.innerHTML = '<div class="empty">Fetching from GitHub…</div>';
   try {
     const res = await fetch('/api/upcoming');
-    const issues = await res.json();
-    if (res.ok && issues.error) throw new Error(issues.error);
-    countEl.textContent = issues.length ? `— ${issues.length} eligible` : '';
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error);
+
+    const issues = data.issues ?? [];
+    const nextBatchAt = data.nextBatchAt;
+    const schedulerEnabled = data.schedulerEnabled;
+
+    countEl.textContent = issues.length
+      ? `— ${issues.length} eligible${schedulerEnabled && nextBatchAt ? `, next batch ${relTime(new Date(nextBatchAt).toISOString())}` : ''}`
+      : '';
+
     if (!issues.length) {
       grid.innerHTML = '<div class="empty">No eligible issues found (all in cooldown or already processed).</div>';
       return;
     }
-    grid.innerHTML = issues.map(i => `
+    grid.innerHTML = issues.map(i => {
+      const withinBatch = data.batchSize && issues.indexOf(i) < data.batchSize;
+      const expectedLabel = i.expectedAt
+        ? `<span style="color:${withinBatch ? 'var(--green)' : 'var(--muted)'};font-size:10px">⏱ ${relTime(new Date(i.expectedAt).toISOString())}</span>`
+        : schedulerEnabled
+          ? '<span style="color:var(--muted);font-size:10px">⏱ scheduler off</span>'
+          : '';
+      return `
       <div class="upcoming-row" id="upcoming-${i.number}">
         <div class="upcoming-num">#${i.number}</div>
         <div class="upcoming-body">
@@ -303,6 +318,7 @@ async function loadUpcoming() {
           <div class="upcoming-meta">
             <span>by ${escHtml(i.author)}</span>
             <span>${relTime(i.createdAt)}</span>
+            ${expectedLabel}
             ${i.labels.slice(0,4).map(l => `<span class="label-chip">${escHtml(l)}</span>`).join('')}
           </div>
         </div>
@@ -310,7 +326,7 @@ async function loadUpcoming() {
            style="font-size:11px;color:var(--accent);text-decoration:none;flex-shrink:0">↗</a>
         <button class="btn-run" onclick="runIssue(${i.number}, this)">▶ Run</button>
       </div>
-    `).join('');
+    `}).join('');
   } catch (e) {
     grid.innerHTML = `<div class="empty" style="color:var(--red)">${escHtml(String(e))}</div>`;
   } finally {
