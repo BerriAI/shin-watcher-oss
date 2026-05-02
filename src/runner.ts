@@ -95,6 +95,7 @@ export class Runner {
     }, timeoutMs);
 
     LiveBus.beginRun(taskId, issue, opts?.chatSessionId);
+    LiveBus.planRun(taskId, issue, opts?.chatSessionId, buildInitialPublicPlan(issue));
 
     try {
       LiveBus.setupRun(taskId, issue, opts?.chatSessionId, "Preparing isolated worktree");
@@ -238,4 +239,15 @@ export class Runner {
 function makeTaskId(issueNumber: number): string {
   const ts = new Date().toISOString().replace(/[:.]/g, "-");
   return `${ts}__issue-${issueNumber}`;
+}
+
+function buildInitialPublicPlan(issue: CandidateIssue): string {
+  const body = issue.body.replace(/\s+/g, " ").trim();
+  const bodyHint = body.length > 260 ? `${body.slice(0, 260)}...` : body;
+  return [
+    `I have the issue loaded: **#${issue.number} ${issue.title}**.`,
+    bodyHint ? `Initial read: ${bodyHint}` : "Initial read: the issue body is empty, so I will rely on the title and comments first.",
+    "Plan: boot an isolated LiteLLM worktree, start a local proxy, then use the repro agent to verify the reported behavior with API/browser evidence.",
+    "Once the agent runtime is ready, it will stream its own observations and adjust the repro path from the actual results.",
+  ].join("\n\n");
 }

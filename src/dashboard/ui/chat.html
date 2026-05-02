@@ -343,9 +343,27 @@ function handleReproSetupEvent(ev) {
   const body = reproLivePanel.querySelector('.repro-live-agent-body');
   if (title) title.innerHTML = 'Preparing reproduction <span class="repro-live-issue">#' + esc(String(ev.issueNumber)) + '</span>';
   if (sub) sub.textContent = ev.issueTitle || 'Preparing run';
-  if (body) body.textContent = ev.message || 'Preparing repro agent…';
+  if (body && body.dataset.hasPlan !== 'true') body.textContent = ev.message || 'Preparing repro agent…';
   setReproStatus('Preparing');
   appendReproStep('<span class="repro-live-tool">●</span> ' + esc(ev.message || 'Preparing'), 'run');
+}
+
+function handleReproPlanEvent(ev) {
+  if (!liveEventForThisChat(ev)) return;
+  if (!reproLivePanel) ensureReproPendingPanel({ issueNumber: ev.issueNumber });
+  reproLivePanel.dataset.taskId = ev.taskId || 'pending';
+  watchTaskId = ev.taskId || watchTaskId;
+  const title = reproLivePanel.querySelector('.repro-live-title');
+  const sub = reproLivePanel.querySelector('.repro-live-sub');
+  const body = reproLivePanel.querySelector('.repro-live-agent-body');
+  if (title) title.innerHTML = 'Preparing reproduction <span class="repro-live-issue">#' + esc(String(ev.issueNumber)) + '</span>';
+  if (sub) sub.textContent = ev.issueTitle || 'Preparing run';
+  if (body) {
+    body.innerHTML = md(ev.message || 'Reading issue and preparing repro plan...');
+    body.dataset.hasPlan = 'true';
+  }
+  setReproStatus('Preparing');
+  appendReproStep('<span class="repro-live-tool">●</span> Initial issue readout ready', 'done');
 }
 
 function handleReproSetupError(ev) {
@@ -393,7 +411,7 @@ function markReproAgentReady(ev) {
   const title = reproLivePanel.querySelector('.repro-live-title');
   const body = reproLivePanel.querySelector('.repro-live-agent-body');
   if (title) title.innerHTML = 'Reproduction run <span class="repro-live-issue">#' + esc(String(ev.issueNumber)) + '</span>';
-  if (body) body.textContent = 'Agent is ready. Waiting for its public worklog…';
+  if (body && body.dataset.hasPlan !== 'true') body.textContent = 'Agent is ready. Waiting for its public worklog…';
   setReproStatus('Running');
   appendReproStep('<span class="repro-live-tool">●</span> Agent runtime ready', 'done');
 }
@@ -670,6 +688,10 @@ function connectSSE() {
     const ev = JSON.parse(e.data);
     if (ev.type === 'run_setup') {
       handleReproSetupEvent(ev);
+      return;
+    }
+    if (ev.type === 'run_plan') {
+      handleReproPlanEvent(ev);
       return;
     }
     if (ev.type === 'run_setup_error') {

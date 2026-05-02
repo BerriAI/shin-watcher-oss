@@ -59,6 +59,24 @@ class LiveBusImpl extends EventEmitter {
     });
   }
 
+  planRun(
+    taskId: string,
+    issue: CandidateIssue,
+    chatSessionId: string | undefined,
+    message: string
+  ): void {
+    this.emit("run_plan", {
+      type: "run_plan",
+      taskId,
+      issueNumber: issue.number,
+      issueTitle: issue.title,
+      issueUrl: issue.htmlUrl,
+      session_id: chatSessionId ?? null,
+      message,
+      ts: Date.now(),
+    });
+  }
+
   setupError(
     taskId: string,
     issue: CandidateIssue,
