@@ -34,6 +34,42 @@ export interface ShellToolOptions {
 
 const MAX_OUTPUT_DEFAULT = 64_000;
 
+/**
+ * Keys from process.env that shell subprocesses genuinely need.
+ * Everything else — including all secret env vars — is stripped so an
+ * adversarial or jailbroken prompt cannot exfiltrate credentials via
+ * `echo $GITHUB_TOKEN` or similar.
+ */
+const SHELL_ENV_ALLOWLIST = new Set([
+  "PATH", "HOME", "USER", "LOGNAME", "SHELL",
+  "LANG", "LC_ALL", "LC_CTYPE", "TZ",
+  "TERM", "COLORTERM",
+  // Python / uv toolchain
+  "PYTHONPATH", "PYTHONDONTWRITEBYTECODE", "VIRTUAL_ENV", "UV_CACHE_DIR",
+  // Node (for npx / litellm JS helpers)
+  "NODE_ENV", "NODE_PATH",
+  // Git needs these to avoid interactive prompts
+  "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL",
+  "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
+  "GIT_TERMINAL_PROMPT",
+  // tmpdir
+  "TMPDIR", "TEMP", "TMP",
+]);
+
+function buildShellEnv(): Record<string, string> {
+  const out: Record<string, string> = {
+    // Disable interactive git auth prompts unconditionally.
+    GIT_TERMINAL_PROMPT: "0",
+    // Prevent Python from writing .pyc clutter in cloned repos.
+    PYTHONDONTWRITEBYTECODE: "1",
+  };
+  for (const key of SHELL_ENV_ALLOWLIST) {
+    const v = process.env[key];
+    if (typeof v === "string") out[key] = v;
+  }
+  return out;
+}
+
 export function makeShellTool(opts: ShellToolOptions): AgentTool<typeof ShellParams> {
   return {
     name: "shell",
@@ -58,7 +94,7 @@ export function makeShellTool(opts: ShellToolOptions): AgentTool<typeof ShellPar
           maxBuffer: maxBytes * 4,
           signal,
           shell: "/bin/bash",
-          env: process.env,
+          env: buildShellEnv(),
         });
         const out = truncate(stdout, maxBytes);
         const err = truncate(stderr, maxBytes);

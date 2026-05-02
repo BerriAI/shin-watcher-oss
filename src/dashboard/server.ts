@@ -534,12 +534,10 @@ function isAuthorized(req: Request): boolean {
   const headerKey = req.get("x-api-key") ?? req.get("x-shin-key");
   const auth = req.get("authorization");
   const bearer = auth?.match(/^Bearer\s+(.+)$/i)?.[1];
-  const queryKey = typeof req.query["api_key"] === "string" ? req.query["api_key"] : undefined;
 
   return (
     secureEqual(headerKey, masterKey) ||
     secureEqual(bearer, masterKey) ||
-    secureEqual(queryKey, masterKey) ||
     verifySessionCookie(readCookie(req, "shin_dashboard_session"))
   );
 }

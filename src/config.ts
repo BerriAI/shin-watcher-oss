@@ -66,9 +66,9 @@ export const config = {
     maxFixPrsPerDay: int("MAX_FIX_PRS_PER_DAY", 5),
   },
   proxy: {
-    masterKey: optional("PROXY_MASTER_KEY", "sk-1234"),
+    masterKey: required("PROXY_MASTER_KEY"),
     uiUsername: optional("PROXY_UI_USERNAME", "admin"),
-    uiPassword: optional("PROXY_UI_PASSWORD", "admin123"),
+    uiPassword: required("PROXY_UI_PASSWORD"),
     sandboxDbUrl: optional("LITELLM_SANDBOX_DB_URL", ""),
     port: int("PROXY_PORT", 4000),
   },
