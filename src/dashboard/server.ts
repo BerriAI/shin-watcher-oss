@@ -37,10 +37,7 @@ export function startDashboard(runner: Runner, port = 3333): void {
   });
 
   app.post("/logout", (_req, res) => {
-    res.setHeader(
-      "Set-Cookie",
-      "shin_dashboard_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0"
-    );
+    res.setHeader("Set-Cookie", serializeExpiredSessionCookie());
     res.redirect("/login");
   });
 
@@ -427,13 +424,27 @@ function readCookie(req: Request, name: string): string | undefined {
 }
 
 function serializeSessionCookie(value: string): string {
-  return [
+  const parts = [
     `shin_dashboard_session=${encodeURIComponent(value)}`,
     "HttpOnly",
-    "SameSite=Lax",
+    "SameSite=Strict",
     "Path=/",
     "Max-Age=604800",
-  ].join("; ");
+  ];
+  if (config.dashboard.cookieSecure) parts.push("Secure");
+  return parts.join("; ");
+}
+
+function serializeExpiredSessionCookie(): string {
+  const parts = [
+    "shin_dashboard_session=",
+    "HttpOnly",
+    "SameSite=Strict",
+    "Path=/",
+    "Max-Age=0",
+  ];
+  if (config.dashboard.cookieSecure) parts.push("Secure");
+  return parts.join("; ");
 }
 
 function renderLoginPage(error?: string): string {

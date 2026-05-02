@@ -42,13 +42,11 @@ export const config = {
     modelId: required("LITELLM_MODEL_ID"),
   },
   dashboard: {
-    masterKey: optional("DASHBOARD_MASTER_KEY", optional("PROXY_MASTER_KEY", "sk-1234")),
-    username: optional("DASHBOARD_USERNAME", "admin"),
-    password: optional("DASHBOARD_PASSWORD", "admin123"),
-    sessionSecret: optional(
-      "DASHBOARD_SESSION_SECRET",
-      optional("DASHBOARD_MASTER_KEY", optional("PROXY_MASTER_KEY", "sk-1234"))
-    ),
+    masterKey: required("DASHBOARD_MASTER_KEY"),
+    username: required("DASHBOARD_USERNAME"),
+    password: required("DASHBOARD_PASSWORD"),
+    sessionSecret: required("DASHBOARD_SESSION_SECRET"),
+    cookieSecure: bool("DASHBOARD_COOKIE_SECURE", process.env["NODE_ENV"] === "production"),
   },
   github: {
     token: required("GITHUB_TOKEN"),
