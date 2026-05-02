@@ -115,6 +115,60 @@ export function startDashboard(port = 3333): void {
     });
   });
 
+  // ── API: upcoming issues (picker preview) ─────────────────────────────────
+
+  app.get("/api/upcoming", async (_req, res) => {
+    try {
+      const state = new State(config.paths.stateDb);
+      const picker = new Picker(
+        config.github.token,
+        config.github.targetOwner,
+        config.github.targetRepo,
+        state
+      );
+      const issues = await picker.pickBatch(15);
+      state.close();
+      res.json(
+        issues.map((i) => ({
+          number: i.number,
+          title: i.title,
+          htmlUrl: i.htmlUrl,
+          author: i.author,
+          labels: i.labels,
+          createdAt: i.createdAt,
+        }))
+      );
+    } catch (e) {
+      res.status(500).json({ error: String(e) });
+    }
+  });
+
+  // ── API: manually trigger a single issue ──────────────────────────────────
+
+  app.post("/api/run-issue/:number", async (req, res) => {
+    if (!isAuthorized(req)) { res.status(401).json({ error: "unauthorized" }); return; }
+    const issueNumber = parseInt(req.params.number, 10);
+    if (isNaN(issueNumber)) {
+      res.status(400).json({ error: "invalid issue number" });
+      return;
+    }
+    const sessionId = `manual-${issueNumber}-${Date.now()}`;
+    const msg =
+      `Reproduce issue #${issueNumber} on ` +
+      `${config.github.targetOwner}/${config.github.targetRepo} ` +
+      `and post your findings as a comment on the issue.`;
+    setImmediate(async () => {
+      try {
+        const session = SessionManager.getOrCreate(sessionId);
+        const agent = await awaitSessionAgent(session, 120_000);
+        await (agent as unknown as { prompt: (m: string) => Promise<void> }).prompt(msg);
+      } catch (e) {
+        console.error(`[manual] issue #${issueNumber} failed:`, e);
+      }
+    });
+    res.json({ ok: true, sessionId });
+  });
+
   // ── API: recent history ────────────────────────────────────────────────────
 
   app.get("/api/history", (_req, res) => {

@@ -87,6 +87,26 @@
     .btn-refresh:hover { color: var(--text); border-color: var(--accent); }
     .last-updated { font-size: 11px; color: var(--muted); }
 
+    /* ── upcoming ── */
+    .upcoming-grid { display: flex; flex-direction: column; gap: 6px; }
+    .upcoming-row {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+      padding: 10px 14px; display: flex; align-items: center; gap: 12px;
+    }
+    .upcoming-row:hover { border-color: rgba(99,102,241,0.4); }
+    .upcoming-num { font-size: 11px; font-weight: 700; color: var(--accent); flex-shrink: 0; width: 52px; }
+    .upcoming-body { flex: 1; min-width: 0; }
+    .upcoming-title { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .upcoming-meta { font-size: 11px; color: var(--muted); margin-top: 2px; display: flex; gap: 8px; flex-wrap: wrap; }
+    .label-chip { font-size: 10px; padding: 1px 5px; border-radius: 3px; background: rgba(255,255,255,0.07); color: var(--muted); }
+    .btn-run {
+      background: rgba(99,102,241,0.15); border: 1px solid rgba(99,102,241,0.35); color: #a5b4fc;
+      border-radius: 6px; padding: 5px 12px; font-size: 12px; font-weight: 600; cursor: pointer; flex-shrink: 0; white-space: nowrap;
+    }
+    .btn-run:hover { background: rgba(99,102,241,0.28); border-color: var(--accent); color: #fff; }
+    .btn-run:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-run.queued { background: rgba(52,211,153,0.1); border-color: rgba(52,211,153,0.3); color: var(--green); }
+
     ::-webkit-scrollbar { width: 4px; }
     ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
   </style>
@@ -116,6 +136,17 @@
         </div>
       </div>
       <div class="active-grid" id="active-grid">
+        <div class="empty">Loading…</div>
+      </div>
+    </div>
+
+    <!-- Up next -->
+    <div class="section">
+      <div class="toolbar">
+        <div class="section-title">Up next <span id="upcoming-count" style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0"></span></div>
+        <button class="btn-refresh" onclick="loadUpcoming()" id="upcoming-refresh">↻</button>
+      </div>
+      <div class="upcoming-grid" id="upcoming-grid">
         <div class="empty">Loading…</div>
       </div>
     </div>
@@ -248,6 +279,62 @@ async function load() {
   document.getElementById('last-updated').textContent = `Updated ${new Date().toLocaleTimeString()}`;
 }
 
+async function loadUpcoming() {
+  const grid = document.getElementById('upcoming-grid');
+  const countEl = document.getElementById('upcoming-count');
+  const btn = document.getElementById('upcoming-refresh');
+  btn.disabled = true;
+  grid.innerHTML = '<div class="empty">Fetching from GitHub…</div>';
+  try {
+    const res = await fetch('/api/upcoming');
+    const issues = await res.json();
+    if (res.ok && issues.error) throw new Error(issues.error);
+    countEl.textContent = issues.length ? `— ${issues.length} eligible` : '';
+    if (!issues.length) {
+      grid.innerHTML = '<div class="empty">No eligible issues found (all in cooldown or already processed).</div>';
+      return;
+    }
+    grid.innerHTML = issues.map(i => `
+      <div class="upcoming-row" id="upcoming-${i.number}">
+        <div class="upcoming-num">#${i.number}</div>
+        <div class="upcoming-body">
+          <div class="upcoming-title">${escHtml(i.title)}</div>
+          <div class="upcoming-meta">
+            <span>by ${escHtml(i.author)}</span>
+            <span>${relTime(i.createdAt)}</span>
+            ${i.labels.slice(0,4).map(l => `<span class="label-chip">${escHtml(l)}</span>`).join('')}
+          </div>
+        </div>
+        <a href="${escHtml(i.htmlUrl)}" target="_blank" rel="noopener"
+           style="font-size:11px;color:var(--accent);text-decoration:none;flex-shrink:0">↗</a>
+        <button class="btn-run" onclick="runIssue(${i.number}, this)">▶ Run</button>
+      </div>
+    `).join('');
+  } catch (e) {
+    grid.innerHTML = `<div class="empty" style="color:var(--red)">${escHtml(String(e))}</div>`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function runIssue(number, btn) {
+  btn.disabled = true;
+  btn.textContent = '…';
+  try {
+    const res = await fetch(`/api/run-issue/${number}`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error ?? 'failed');
+    btn.textContent = '✓ Queued';
+    btn.className = 'btn-run queued';
+    // refresh active section after a moment
+    setTimeout(load, 2000);
+  } catch (e) {
+    btn.textContent = '✗ Error';
+    btn.title = String(e);
+    btn.disabled = false;
+  }
+}
+
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
@@ -255,6 +342,7 @@ function escHtml(s) {
 // Auto-refresh every 15s
 load();
 setInterval(load, 15_000);
+loadUpcoming();
 </script>
 </body>
 </html>
