@@ -57,6 +57,19 @@ export class Picker {
    * Pick the most recently updated remaining one.
    */
   async pickNext(): Promise<CandidateIssue | null> {
+    const batch = await this.pickBatch(1);
+    return batch[0] ?? null;
+  }
+
+  /**
+   * Returns up to `limit` eligible issues in recency order.
+   * An issue is skipped if:
+   *   - it is a PR
+   *   - title/labels mark it as a non-bug
+   *   - it already has a `shin-watcher:` label (already processed)
+   *   - it is in the State cooldown window
+   */
+  async pickBatch(limit: number): Promise<CandidateIssue[]> {
     const { data } = await this.octokit.issues.listForRepo({
       owner: this.owner,
       repo: this.repo,
@@ -66,17 +79,24 @@ export class Picker {
       per_page: 100,
     });
 
+    const results: CandidateIssue[] = [];
+
     for (const issue of data) {
-      // listForRepo includes PRs — filter them out.
+      if (results.length >= limit) break;
       if (issue.pull_request) continue;
+
       const labels = issue.labels.map((l) =>
         typeof l === "string" ? l : l.name ?? ""
       );
+
+      // Skip if already processed by shin-watcher (label was applied).
+      if (labels.some((l) => l.startsWith("shin-watcher:"))) continue;
+
       if (looksLikeNonBug(issue.title, labels)) continue;
       if (this.state.isInCooldown(issue.number)) continue;
 
       const recentComments = await this.fetchRecentComments(issue.number);
-      return {
+      results.push({
         number: issue.number,
         title: issue.title,
         body: issue.body ?? "",
@@ -85,9 +105,10 @@ export class Picker {
         labels,
         createdAt: issue.created_at,
         recentComments,
-      };
+      });
     }
-    return null;
+
+    return results;
   }
 
   async fetchOne(issueNumber: number): Promise<CandidateIssue> {

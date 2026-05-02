@@ -293,7 +293,7 @@ If the label doesn't exist on the repo yet, create it first with `github_create_
 ## Rules
 
 - Every claim needs a screenshot. No unsubstantiated assertions.
-- Score 0 or 1 → post the comment explaining why, then stop. Do not attempt a fix.
+- Score 0 or 1 → STILL post the comment and apply the label. Explain clearly why it can't be reproduced or why it looks like a feature request / not-a-bug.
 - Score ≥ 3 → include root cause and fix instructions.
 - Keep comment under 50 lines. Use `<details>` to collapse verbose curl output.
 - Return: paths to all annotated screenshots in order + one sentence per screenshot explaining what it shows and why it matters.

@@ -57,6 +57,8 @@ export const config = {
   schedule: {
     intervalMin: int("INTERVAL_MIN", 15),
     maxRunMinutes: int("MAX_RUN_MINUTES", 20),
+    batchIntervalMin: int("BATCH_INTERVAL_MIN", 0),   // 0 = disabled
+    batchSize: int("BATCH_SIZE", 10),
   },
   flags: {
     postComments: bool("POST_COMMENTS", false),

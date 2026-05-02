@@ -8,9 +8,58 @@ import { LiveBus, type LiveEvent } from "./live.js";
 import { SessionManager, awaitSessionAgent } from "./session.js";
 import { config } from "../config.js";
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
+import { Picker } from "../picker.js";
+import { State } from "../state.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.join(__dirname, "ui");
+
+/**
+ * Pick up to `batchSize` unprocessed issues and fire one root-agent session
+ * per issue. Issues are sent sequentially with a short stagger so they don't
+ * all try to clone + boot a proxy at the same instant.
+ */
+async function runBatch(batchSize: number): Promise<void> {
+  const state = new State(config.paths.stateDb);
+  const picker = new Picker(
+    config.github.token,
+    config.github.targetOwner,
+    config.github.targetRepo,
+    state
+  );
+
+  const issues = await picker.pickBatch(batchSize);
+  if (issues.length === 0) {
+    console.log("[scheduler] no eligible issues found");
+    return;
+  }
+
+  console.log(`[scheduler] starting batch of ${issues.length} issues`);
+
+  for (const issue of issues) {
+    const sessionId = `batch-${issue.number}-${Date.now()}`;
+    const msg =
+      `Reproduce issue #${issue.number} on ` +
+      `${config.github.targetOwner}/${config.github.targetRepo} ` +
+      `and post your findings as a comment on the issue.`;
+
+    console.log(`[scheduler] queuing #${issue.number}: ${issue.title}`);
+
+    // Fire-and-forget — each runs in its own session.
+    setImmediate(async () => {
+      try {
+        const session = SessionManager.getOrCreate(sessionId);
+        const agent = await awaitSessionAgent(session, 120_000);
+        await (agent as unknown as { prompt: (m: string) => Promise<void> }).prompt(msg);
+      } catch (e) {
+        console.error(`[scheduler] issue #${issue.number} failed:`, e);
+      }
+    });
+
+    // Stagger starts by 10s so clones don't all hit disk at once.
+    await new Promise((r) => setTimeout(r, 10_000));
+  }
+}
 
 export function startDashboard(port = 3333): void {
   const app = express();
@@ -268,8 +317,6 @@ export function startDashboard(port = 3333): void {
     });
   });
 
-  // ── POST: interrupt ───────────────────────────────────────────────────────
-
   app.post("/api/interrupt", (_req, res) => {
     const active = LiveBus.getActiveRuns();
     if (active.length === 0) {
@@ -335,6 +382,24 @@ export function startDashboard(port = 3333): void {
     if (!fs.existsSync(imgPath)) return res.status(404).send("not found");
     res.sendFile(imgPath);
   });
+
+  // ── Internal batch scheduler ──────────────────────────────────────────────
+  // If BATCH_INTERVAL_MIN > 0, picks up to BATCH_SIZE unprocessed issues and
+  // fires a repro session for each on that cadence. No external trigger needed.
+
+  if (config.schedule.batchIntervalMin > 0) {
+    const runScheduledBatch = () => {
+      runBatch(config.schedule.batchSize).catch((e) =>
+        console.error("[scheduler] batch error:", e)
+      );
+    };
+    // Fire once shortly after startup, then on interval.
+    setTimeout(runScheduledBatch, 30_000);
+    setInterval(runScheduledBatch, config.schedule.batchIntervalMin * 60_000);
+    console.log(
+      `  Scheduler   →  every ${config.schedule.batchIntervalMin}m, ${config.schedule.batchSize} issues/batch\n`
+    );
+  }
 
   app.listen(port, () => {
     console.log(`\n  Dashboard  →  http://localhost:${port}\n`);
