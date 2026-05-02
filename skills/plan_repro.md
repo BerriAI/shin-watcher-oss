@@ -218,18 +218,35 @@ await page.context().tracing.stop({
 
 ## Step 9 — Comment on the issue
 
-Post ONE comment via `github_add_issue_comment`:
+Post ONE comment via `github_add_issue_comment`. Use this exact structure:
 
 ```
-## 🤖 shin-watcher repro report
+## 🤖 shin-watcher
 
-**Score: N/5** — <one-line reason>
+# Confidence score: N/5
+
+> **Why?**
+> <2–4 sentences explaining the verdict. What exactly was tested, what was observed,
+> and why this score was given. Be specific — reference HTTP status codes, endpoint
+> names, exact error messages, or "works as designed" reasoning.>
+
+---
 
 ### Reproduction evidence
 ![caption](screenshot_url)
 ![caption](screenshot_url)
 
-### What's broken
+<details>
+<summary>Curl output</summary>
+
+```bash
+$ curl ...
+HTTP 4xx / body here
+```
+
+</details>
+
+### What's broken (if score ≥ 2)
 <2–3 sentences: exact symptom, affected endpoint/UI, expected vs actual>
 
 ### Root cause (if score ≥ 3)
@@ -237,7 +254,7 @@ Post ONE comment via `github_add_issue_comment`:
 
 ---
 
-### 👇 Fix instructions
+### 👇 Fix instructions (if score ≥ 3)
 
 **Difficulty:** easy | medium | hard
 
@@ -251,10 +268,32 @@ Post ONE comment via `github_add_issue_comment`:
 
 ---
 
+## Step 10 — Apply a shin-watcher label
+
+After posting the comment, apply exactly ONE label to the issue via `github_update_issue`
+(pass `labels: [<existing labels...>, "<new label>"]`).
+
+First check the issue's existing labels with `github_get_issue` so you don't clobber them.
+
+Label mapping:
+
+| Verdict | Label to add |
+|---------|-------------|
+| 4–5     | `shin-watcher: reproduced` |
+| 2–3     | `shin-watcher: partial` |
+| 0–1     | `shin-watcher: not-reproduced` |
+
+If the label doesn't exist on the repo yet, create it first with `github_create_label`:
+- `shin-watcher: reproduced` → color `0075ca` (blue)
+- `shin-watcher: partial`    → color `e4e669` (yellow)
+- `shin-watcher: not-reproduced` → color `d93f0b` (red)
+
+---
+
 ## Rules
 
 - Every claim needs a screenshot. No unsubstantiated assertions.
 - Score 0 or 1 → post the comment explaining why, then stop. Do not attempt a fix.
 - Score ≥ 3 → include root cause and fix instructions.
-- Keep comment under 40 lines. Use `<details>` to collapse verbose curl output.
+- Keep comment under 50 lines. Use `<details>` to collapse verbose curl output.
 - Return: paths to all annotated screenshots in order + one sentence per screenshot explaining what it shows and why it matters.
