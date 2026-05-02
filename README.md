@@ -14,6 +14,9 @@ when `AUTO_FIX=true`, easy/medium issues also get a fix attempt and a draft PR.
 - posts a report comment with screenshots when `POST_COMMENTS=true`
 - opens a draft fix PR when `AUTO_FIX=true`
 
+<img width="1878" height="1685" alt="Xnapper-2026-05-01-19 45 52" src="https://github.com/user-attachments/assets/022bff8e-94ed-4adc-92ea-cfbec165f234" />
+
+
 ## Setup
 
 ```bash
