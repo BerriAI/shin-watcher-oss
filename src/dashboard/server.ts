@@ -45,6 +45,9 @@ async function runBatch(batchSize: number): Promise<void> {
 
     console.log(`[scheduler] queuing #${issue.number}: ${issue.title}`);
 
+    // Show immediately in Active Now before agent boots.
+    LiveBus.queueRun(issue, sessionId);
+
     // Fire-and-forget — each runs in its own session.
     setImmediate(async () => {
       try {
@@ -157,6 +160,22 @@ export function startDashboard(port = 3333): void {
       `Reproduce issue #${issueNumber} on ` +
       `${config.github.targetOwner}/${config.github.targetRepo} ` +
       `and post your findings as a comment on the issue.`;
+
+    // Immediately register in LiveBus so it shows in Active Now while the agent boots.
+    try {
+      const state = new State(config.paths.stateDb);
+      const picker = new Picker(config.github.token, config.github.targetOwner, config.github.targetRepo, state);
+      const issue = await picker.fetchOne(issueNumber);
+      state.close();
+      LiveBus.queueRun(issue, sessionId);
+    } catch {
+      // If we can't fetch the issue, still proceed — the agent will handle it.
+      LiveBus.queueRun(
+        { number: issueNumber, title: `Issue #${issueNumber}`, body: "", htmlUrl: `https://github.com/${config.github.targetOwner}/${config.github.targetRepo}/issues/${issueNumber}`, author: "", labels: [], createdAt: new Date().toISOString(), recentComments: [] },
+        sessionId
+      );
+    }
+
     setImmediate(async () => {
       try {
         const session = SessionManager.getOrCreate(sessionId);
@@ -164,6 +183,8 @@ export function startDashboard(port = 3333): void {
         await (agent as unknown as { prompt: (m: string) => Promise<void> }).prompt(msg);
       } catch (e) {
         console.error(`[manual] issue #${issueNumber} failed:`, e);
+        // Remove stale queued placeholder on failure
+        LiveBus.endRun(`queued-${issueNumber}`);
       }
     });
     res.json({ ok: true, sessionId });

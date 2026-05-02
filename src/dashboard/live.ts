@@ -8,7 +8,7 @@ export interface ActiveRun {
   issue: CandidateIssue;
   agent?: Agent;
   startedAt: number;
-  phase: "setup" | "agent";
+  phase: "queued" | "setup" | "agent";
   /** Dashboard chat session that queued this run (browser-generated UUID). */
   chatSessionId?: string;
 }
@@ -21,7 +21,24 @@ export interface LiveEvent {
 class LiveBusImpl extends EventEmitter {
   private activeRuns = new Map<string, ActiveRun>();
 
+  /** Immediately registers a placeholder so the issue shows in Active Now while the agent is booting. */
+  queueRun(issue: CandidateIssue, chatSessionId?: string): void {
+    const taskId = `queued-${issue.number}`;
+    this.activeRuns.set(taskId, {
+      taskId,
+      issue,
+      startedAt: Date.now(),
+      phase: "queued",
+      chatSessionId,
+    });
+  }
+
   beginRun(taskId: string, issue: CandidateIssue, chatSessionId?: string): void {
+    // Remove any queued placeholder for this issue number
+    const queuedKey = `queued-${issue.number}`;
+    if (this.activeRuns.has(queuedKey)) {
+      this.activeRuns.delete(queuedKey);
+    }
     const startedAt = Date.now();
     this.activeRuns.set(taskId, {
       taskId,

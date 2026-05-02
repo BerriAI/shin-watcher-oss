@@ -49,6 +49,7 @@
     .run-card-title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .run-card-meta { font-size: 11px; color: var(--muted); margin-top: 3px; display: flex; gap: 10px; }
     .phase-badge { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px; background: rgba(99,102,241,0.2); color: #a5b4fc; }
+    .phase-queued { background: rgba(251,191,36,0.15); color: #fbbf24; }
     .run-card a { font-size: 11px; color: var(--accent); text-decoration: none; flex-shrink: 0; }
     .run-card a:hover { text-decoration: underline; }
     .empty { font-size: 13px; color: var(--muted); font-style: italic; padding: 6px 0; }
@@ -234,13 +235,13 @@ async function load() {
   } else {
     grid.innerHTML = status.active.map(r => `
       <div class="run-card">
-        <div class="pulse"></div>
+        <div class="pulse" style="${r.phase === 'queued' ? 'background:var(--yellow)' : ''}"></div>
         <div class="run-card-body">
           <div class="run-card-title">#${r.issueNumber} — ${escHtml(r.issueTitle ?? '')}</div>
           <div class="run-card-meta">
-            <span>Started ${relTime(new Date(r.startedAt).toISOString())}</span>
-            <span class="phase-badge">${r.phase}</span>
-            ${r.taskId ? `<span style="color:var(--muted);font-size:10px">${r.taskId.slice(0, 24)}…</span>` : ''}
+            <span>${r.phase === 'queued' ? 'Queued' : 'Started'} ${relTime(new Date(r.startedAt).toISOString())}</span>
+            <span class="phase-badge ${r.phase === 'queued' ? 'phase-queued' : ''}">${r.phase}</span>
+            ${r.taskId && r.phase !== 'queued' ? `<span style="color:var(--muted);font-size:10px">${r.taskId.slice(0, 24)}…</span>` : ''}
           </div>
         </div>
         <a href="${issueUrl(r.issueNumber)}" target="_blank" rel="noopener">#${r.issueNumber} ↗</a>
@@ -326,8 +327,9 @@ async function runIssue(number, btn) {
     if (!res.ok || data.error) throw new Error(data.error ?? 'failed');
     btn.textContent = '✓ Queued';
     btn.className = 'btn-run queued';
-    // refresh active section after a moment
-    setTimeout(load, 2000);
+    // refresh active section immediately and again after agent boots
+    load();
+    setTimeout(load, 5000);
   } catch (e) {
     btn.textContent = '✗ Error';
     btn.title = String(e);
