@@ -41,6 +41,15 @@ export const config = {
     apiKey: required("LITELLM_API_KEY"),
     modelId: required("LITELLM_MODEL_ID"),
   },
+  dashboard: {
+    masterKey: optional("DASHBOARD_MASTER_KEY", optional("PROXY_MASTER_KEY", "sk-1234")),
+    username: optional("DASHBOARD_USERNAME", "admin"),
+    password: optional("DASHBOARD_PASSWORD", "admin123"),
+    sessionSecret: optional(
+      "DASHBOARD_SESSION_SECRET",
+      optional("DASHBOARD_MASTER_KEY", optional("PROXY_MASTER_KEY", "sk-1234"))
+    ),
+  },
   github: {
     token: required("GITHUB_TOKEN"),
     botUsername: required("GITHUB_BOT_USERNAME"),

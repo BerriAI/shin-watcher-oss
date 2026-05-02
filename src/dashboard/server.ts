@@ -1,4 +1,5 @@
-import express, { type Request, type Response } from "express";
+import express, { type NextFunction, type Request, type Response } from "express";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +15,36 @@ const UI_DIR = path.join(__dirname, "ui");
 export function startDashboard(runner: Runner, port = 3333): void {
   const app = express();
   app.use(express.json());
+  app.use(express.urlencoded({ extended: false }));
+
+  app.get("/login", (_req, res) => {
+    res.type("html").send(renderLoginPage());
+  });
+
+  app.post("/login", (req, res) => {
+    const { username, password } = req.body as {
+      username?: string;
+      password?: string;
+    };
+    if (
+      username === config.dashboard.username &&
+      password === config.dashboard.password
+    ) {
+      res.setHeader("Set-Cookie", serializeSessionCookie(makeSessionCookie()));
+      return res.redirect("/");
+    }
+    return res.status(401).type("html").send(renderLoginPage("Invalid username or password."));
+  });
+
+  app.post("/logout", (_req, res) => {
+    res.setHeader(
+      "Set-Cookie",
+      "shin_dashboard_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0"
+    );
+    res.redirect("/login");
+  });
+
+  app.use(requireDashboardAuth);
   app.use("/ui", express.static(UI_DIR));
 
   // ── Pages ──────────────────────────────────────────────────────────────────
@@ -315,4 +346,155 @@ function parseIssueNumber(input: string): number | null {
   const numMatch = input.match(/#?(\d+)/);
   if (numMatch) return parseInt(numMatch[1] as string, 10);
   return null;
+}
+
+function requireDashboardAuth(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  if (isAuthorized(req)) {
+    next();
+    return;
+  }
+
+  const acceptsHtml = req.accepts(["html", "json"]) === "html";
+  if (acceptsHtml && req.method === "GET") {
+    res.redirect("/login");
+    return;
+  }
+  res.status(401).json({ error: "unauthorized" });
+}
+
+function isAuthorized(req: Request): boolean {
+  const masterKey = config.dashboard.masterKey;
+  const headerKey = req.get("x-api-key") ?? req.get("x-shin-key");
+  const auth = req.get("authorization");
+  const bearer = auth?.match(/^Bearer\s+(.+)$/i)?.[1];
+  const queryKey = typeof req.query["api_key"] === "string" ? req.query["api_key"] : undefined;
+
+  return (
+    secureEqual(headerKey, masterKey) ||
+    secureEqual(bearer, masterKey) ||
+    secureEqual(queryKey, masterKey) ||
+    verifySessionCookie(readCookie(req, "shin_dashboard_session"))
+  );
+}
+
+function secureEqual(a: string | undefined, b: string): boolean {
+  if (!a) return false;
+  const aa = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return aa.length === bb.length && crypto.timingSafeEqual(aa, bb);
+}
+
+function makeSessionCookie(): string {
+  const issuedAt = Date.now().toString();
+  const payload = Buffer.from(issuedAt).toString("base64url");
+  const sig = crypto
+    .createHmac("sha256", config.dashboard.sessionSecret)
+    .update(payload)
+    .digest("base64url");
+  return `${payload}.${sig}`;
+}
+
+function verifySessionCookie(value: string | undefined): boolean {
+  if (!value) return false;
+  const [payload, sig] = value.split(".");
+  if (!payload || !sig) return false;
+
+  const expected = crypto
+    .createHmac("sha256", config.dashboard.sessionSecret)
+    .update(payload)
+    .digest("base64url");
+  if (!secureEqual(sig, expected)) return false;
+
+  const issuedAtRaw = Buffer.from(payload, "base64url").toString("utf8");
+  const issuedAt = Number.parseInt(issuedAtRaw, 10);
+  if (!Number.isFinite(issuedAt)) return false;
+  const maxAgeMs = 7 * 24 * 60 * 60 * 1000;
+  return Date.now() - issuedAt < maxAgeMs;
+}
+
+function readCookie(req: Request, name: string): string | undefined {
+  const cookie = req.get("cookie");
+  if (!cookie) return undefined;
+  for (const part of cookie.split(";")) {
+    const [k, ...rest] = part.trim().split("=");
+    if (k === name) return decodeURIComponent(rest.join("="));
+  }
+  return undefined;
+}
+
+function serializeSessionCookie(value: string): string {
+  return [
+    `shin_dashboard_session=${encodeURIComponent(value)}`,
+    "HttpOnly",
+    "SameSite=Lax",
+    "Path=/",
+    "Max-Age=604800",
+  ].join("; ");
+}
+
+function renderLoginPage(error?: string): string {
+  const err = error
+    ? `<div class="err">${escapeHtml(error)}</div>`
+    : "";
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>shin-watcher login</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; display: grid; place-items: center;
+      background: #0d0d0f; color: #e2e4ec;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    form {
+      width: min(360px, calc(100vw - 32px)); padding: 24px;
+      border: 1px solid #25262c; border-radius: 14px; background: #18191e;
+      box-shadow: 0 20px 80px rgba(0,0,0,.35);
+    }
+    h1 { margin: 0 0 6px; font-size: 18px; }
+    p { margin: 0 0 20px; color: #8b8d98; font-size: 13px; line-height: 1.5; }
+    label { display: block; margin: 12px 0 6px; color: #b6b8c4; font-size: 12px; font-weight: 600; }
+    input {
+      width: 100%; border: 1px solid #25262c; background: #101116; color: #e2e4ec;
+      border-radius: 8px; padding: 10px 12px; font-size: 14px; outline: none;
+    }
+    input:focus { border-color: #6366f1; }
+    button {
+      width: 100%; margin-top: 18px; border: 0; border-radius: 8px; padding: 10px 12px;
+      background: #6366f1; color: #fff; font-size: 14px; font-weight: 700; cursor: pointer;
+    }
+    .err {
+      margin: 0 0 14px; padding: 8px 10px; border-radius: 8px;
+      background: rgba(248,113,113,.12); color: #fca5a5; font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <form method="post" action="/login">
+    <h1>shin-watcher</h1>
+    <p>Sign in to access the dashboard.</p>
+    ${err}
+    <label for="username">Username</label>
+    <input id="username" name="username" autocomplete="username" autofocus />
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" />
+    <button type="submit">Sign in</button>
+  </form>
+</body>
+</html>`;
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
