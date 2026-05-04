@@ -10,6 +10,7 @@ import { config } from "../config.js";
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import { Picker } from "../picker.js";
 import { State } from "../state.js";
+import { runRootChat } from "../chat/rootChat.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.join(__dirname, "ui");
@@ -21,6 +22,7 @@ const UI_DIR = path.join(__dirname, "ui");
  */
 /** Unix ms timestamp of when the next scheduled batch will fire. 0 = scheduler disabled. */
 let nextBatchAt = 0;
+const seenSlackEvents = new Set<string>();
 
 async function runBatch(batchSize: number): Promise<void> {
   const state = new State(config.paths.stateDb);
@@ -69,7 +71,7 @@ async function runBatch(batchSize: number): Promise<void> {
 
 export function startDashboard(port = 3333): void {
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ verify: captureRawBody }));
   app.use(express.urlencoded({ extended: false }));
 
   app.get("/login", (_req, res) => {
@@ -95,6 +97,10 @@ export function startDashboard(port = 3333): void {
     res.setHeader("Set-Cookie", serializeExpiredSessionCookie());
     res.redirect("/login");
   });
+
+  // ── Slack Events API ─────────────────────────────────────────────────────
+  // Public endpoint: Slack authenticates via X-Slack-Signature, not dashboard auth.
+  app.post("/slack/events", handleSlackEvents);
 
   app.use(requireDashboardAuth);
   app.use("/ui", express.static(UI_DIR));
@@ -493,6 +499,211 @@ export function startDashboard(port = 3333): void {
   app.listen(port, () => {
     console.log(`\n  Dashboard  →  http://localhost:${port}\n`);
   });
+}
+
+type SlackRequest = Request & { rawBody?: Buffer };
+
+interface SlackEventEnvelope {
+  type?: string;
+  challenge?: string;
+  team_id?: string;
+  event_id?: string;
+  event?: {
+    type?: string;
+    subtype?: string;
+    text?: string;
+    user?: string;
+    bot_id?: string;
+    channel?: string;
+    channel_type?: string;
+    ts?: string;
+    thread_ts?: string;
+  };
+}
+
+function captureRawBody(req: Request, _res: Response, buf: Buffer): void {
+  (req as SlackRequest).rawBody = Buffer.from(buf);
+}
+
+function handleSlackEvents(req: Request, res: Response): void {
+  if (!verifySlackSignature(req as SlackRequest)) {
+    res.status(401).send("invalid slack signature");
+    return;
+  }
+
+  const body = req.body as SlackEventEnvelope;
+  if (body.type === "url_verification") {
+    res.json({ challenge: body.challenge });
+    return;
+  }
+
+  if (body.type !== "event_callback") {
+    res.status(200).send("ok");
+    return;
+  }
+
+  const event = body.event;
+  if (!event || event.bot_id || event.subtype || !event.channel || !event.ts) {
+    res.status(200).send("ok");
+    return;
+  }
+
+  const route = classifySlackEvent(event);
+  if (!route) {
+    res.status(200).send("ok");
+    return;
+  }
+
+  if (body.event_id && seenSlackEvents.has(body.event_id)) {
+    res.status(200).send("ok");
+    return;
+  }
+  if (body.event_id) {
+    seenSlackEvents.add(body.event_id);
+    setTimeout(() => seenSlackEvents.delete(body.event_id as string), 10 * 60_000).unref();
+  }
+
+  res.status(200).send("ok");
+
+  const teamId = body.team_id ?? "unknown";
+  const threadTs = event.thread_ts ?? event.ts;
+  const sessionId =
+    route.kind === "direct"
+      ? `slack:direct:${teamId}:${event.channel}:${event.user ?? "unknown"}`
+      : `slack:channel:${teamId}:${event.channel}:thread:${threadTs}`;
+  const message = route.message;
+
+  setImmediate(async () => {
+    const initial = await postSlackMessage({
+      channel: event.channel as string,
+      threadTs: route.kind === "direct" ? undefined : threadTs,
+      text:
+        route.kind === "direct"
+          ? "I'm looking into this now. I'll keep this DM as the session context."
+          : "I'm looking into this now. I'll use this Slack thread as the session context.",
+    });
+
+    let buffered = "";
+    let lastProgressAt = 0;
+    await runRootChat({
+      sessionId,
+      message,
+      onDelta: async (delta) => {
+        buffered += delta;
+        const now = Date.now();
+        if (buffered.trim() && now - lastProgressAt > 15_000) {
+          lastProgressAt = now;
+          await postSlackMessage({
+            channel: event.channel as string,
+            threadTs: route.kind === "direct" ? undefined : threadTs,
+            text: truncateSlackText(buffered.trim()),
+          });
+          buffered = "";
+        }
+      },
+      onReproStart: async (replySoFar) => {
+        await postSlackMessage({
+          channel: event.channel as string,
+          threadTs: route.kind === "direct" ? undefined : threadTs,
+          text:
+            truncateSlackText(replySoFar.trim()) ||
+            "Starting the repro run now. You can also watch it in the runs dashboard.",
+        });
+      },
+      onDone: async (reply) => {
+        await postSlackMessage({
+          channel: event.channel as string,
+          threadTs: route.kind === "direct" ? undefined : threadTs,
+          text: truncateSlackText(reply),
+        });
+      },
+      onError: async (error) => {
+        await postSlackMessage({
+          channel: event.channel as string,
+          threadTs: route.kind === "direct" ? undefined : threadTs,
+          text: `Sorry, I hit an error: ${truncateSlackText(error.message, 1_500)}`,
+        });
+      },
+    });
+
+    if (!initial.ok) {
+      console.warn("[slack] initial post failed:", initial.error);
+    }
+  });
+}
+
+function verifySlackSignature(req: SlackRequest): boolean {
+  if (!config.slack.signingSecret) return false;
+  const timestamp = req.get("x-slack-request-timestamp");
+  const signature = req.get("x-slack-signature");
+  const rawBody = req.rawBody;
+  if (!timestamp || !signature || !rawBody) return false;
+
+  const ts = Number.parseInt(timestamp, 10);
+  if (!Number.isFinite(ts)) return false;
+  if (Math.abs(Date.now() / 1000 - ts) > 5 * 60) return false;
+
+  const base = `v0:${timestamp}:${rawBody.toString("utf8")}`;
+  const expected =
+    "v0=" +
+    crypto.createHmac("sha256", config.slack.signingSecret).update(base).digest("hex");
+  return secureEqual(signature, expected);
+}
+
+function cleanSlackMentionText(text: string): string {
+  return text.replace(/<@[A-Z0-9]+>/g, "").trim();
+}
+
+function classifySlackEvent(
+  event: NonNullable<SlackEventEnvelope["event"]>
+): { kind: "direct" | "channel"; message: string } | null {
+  const text = event.text ?? "";
+
+  // OpenClaw-style: DMs are normal inbound messages, no mention required.
+  if (event.type === "message" && event.channel_type === "im") {
+    const message = text.trim();
+    return message ? { kind: "direct", message } : null;
+  }
+
+  // Channel/group conversations are mention-gated by Slack's app_mention event.
+  if (event.type === "app_mention") {
+    const message = cleanSlackMentionText(text);
+    return message ? { kind: "channel", message } : null;
+  }
+
+  return null;
+}
+
+async function postSlackMessage(args: {
+  channel: string;
+  threadTs?: string;
+  text: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  if (!config.slack.botToken) {
+    console.warn("[slack] SLACK_BOT_TOKEN missing; would have posted:", args.text);
+    return { ok: false, error: "missing SLACK_BOT_TOKEN" };
+  }
+  const response = await fetch("https://slack.com/api/chat.postMessage", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.slack.botToken}`,
+      "Content-Type": "application/json; charset=utf-8",
+    },
+    body: JSON.stringify({
+      channel: args.channel,
+      ...(args.threadTs ? { thread_ts: args.threadTs } : {}),
+      text: args.text,
+      unfurl_links: false,
+      unfurl_media: false,
+    }),
+  });
+  const body = (await response.json()) as { ok?: boolean; error?: string };
+  return body.ok ? { ok: true } : { ok: false, error: body.error ?? response.statusText };
+}
+
+function truncateSlackText(text: string, max = 3_500): string {
+  if (text.length <= max) return text;
+  return `${text.slice(0, max - 40)}\n\n... truncated; see runs dashboard for full output.`;
 }
 
 // Parse a GitHub issue number from various input formats — kept for future use.

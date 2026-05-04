@@ -54,6 +54,10 @@ export const config = {
     targetOwner: optional("TARGET_REPO_OWNER", "BerriAI"),
     targetRepo: optional("TARGET_REPO_NAME", "litellm"),
   },
+  slack: {
+    signingSecret: optional("SLACK_SIGNING_SECRET", ""),
+    botToken: optional("SLACK_BOT_TOKEN", ""),
+  },
   schedule: {
     intervalMin: int("INTERVAL_MIN", 15),
     maxRunMinutes: int("MAX_RUN_MINUTES", 20),
