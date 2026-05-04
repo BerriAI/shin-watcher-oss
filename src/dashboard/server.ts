@@ -23,6 +23,8 @@ const UI_DIR = path.join(__dirname, "ui");
 /** Unix ms timestamp of when the next scheduled batch will fire. 0 = scheduler disabled. */
 let nextBatchAt = 0;
 const seenSlackEvents = new Set<string>();
+const seenSlackMessageKeys = new Set<string>();
+const slackPollBootstrappedChannels = new Set<string>();
 const slackDebugEvents: SlackDebugEvent[] = [];
 
 async function runBatch(batchSize: number): Promise<void> {
@@ -507,6 +509,32 @@ export function startDashboard(port = 3333): void {
     );
   }
 
+  // ── Slack poll fallback ──────────────────────────────────────────────────
+  // If Slack Events API delivery is flaky, this can still pick up channel
+  // mentions by polling recent history.
+  if (config.slack.pollEnabled) {
+    const channels = config.slack.pollChannels
+      .split(",")
+      .map((c) => c.trim())
+      .filter(Boolean);
+    if (channels.length === 0) {
+      console.warn("[slack] polling enabled but SLACK_POLL_CHANNELS is empty");
+    } else if (!config.slack.botToken) {
+      console.warn("[slack] polling enabled but SLACK_BOT_TOKEN is missing");
+    } else {
+      const intervalMs = Math.max(3, config.slack.pollIntervalSec) * 1_000;
+      const runPoll = () =>
+        pollSlackChannels(channels).catch((e) =>
+          console.error("[slack] poll error:", e)
+        );
+      setTimeout(runPoll, 2_000);
+      setInterval(runPoll, intervalMs);
+      console.log(
+        `  Slack Poll  →  every ${Math.max(3, config.slack.pollIntervalSec)}s on ${channels.join(", ")}`
+      );
+    }
+  }
+
   app.listen(port, () => {
     console.log(`\n  Dashboard  →  http://localhost:${port}\n`);
   });
@@ -618,6 +646,22 @@ function handleSlackEvents(req: Request, res: Response): void {
     res.status(200).send("ok");
     return;
   }
+
+  const messageKey = `${event.channel}:${event.ts}`;
+  if (seenSlackMessageKeys.has(messageKey)) {
+    recordSlackDebug({
+      stage: "ignored",
+      reason: "duplicate message key",
+      eventId: body.event_id,
+      eventType: event.type,
+      channel: event.channel,
+      channelType: event.channel_type,
+    });
+    res.status(200).send("ok");
+    return;
+  }
+  seenSlackMessageKeys.add(messageKey);
+  setTimeout(() => seenSlackMessageKeys.delete(messageKey), 24 * 60 * 60 * 1000).unref();
 
   const route = classifySlackEvent(event);
   if (!route) {
@@ -836,6 +880,174 @@ function isSlackBotMention(text: string): boolean {
   // mention-gated but may route messages mentioning other users too, so set
   // SLACK_BOT_USER_ID in production.
   return /<@[A-Z0-9]+>/.test(text);
+}
+
+interface SlackHistoryMessage {
+  type?: string;
+  subtype?: string;
+  text?: string;
+  user?: string;
+  bot_id?: string;
+  ts?: string;
+  thread_ts?: string;
+}
+
+async function pollSlackChannels(channels: string[]): Promise<void> {
+  for (const channel of channels) {
+    const response = await fetch("https://slack.com/api/conversations.history", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.slack.botToken}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({ channel, limit: "20" }),
+    });
+    const data = (await response.json()) as {
+      ok?: boolean;
+      error?: string;
+      messages?: SlackHistoryMessage[];
+    };
+    if (!data.ok) {
+      recordSlackDebug({
+        stage: "post_failed",
+        reason: "poll conversations.history failed",
+        channel,
+        channelType: "channel",
+        slackError: data.error ?? response.statusText,
+      });
+      continue;
+    }
+
+    const messages = (data.messages ?? []).slice().reverse();
+    if (!slackPollBootstrappedChannels.has(channel)) {
+      for (const m of messages) {
+        if (!m.ts) continue;
+        seenSlackMessageKeys.add(`${channel}:${m.ts}`);
+      }
+      slackPollBootstrappedChannels.add(channel);
+      recordSlackDebug({
+        stage: "ignored",
+        reason: `poll bootstrap seeded ${messages.length} messages`,
+        channel,
+        channelType: "channel",
+      });
+      continue;
+    }
+
+    for (const m of messages) {
+      if (!m.ts || m.bot_id || m.subtype) continue;
+      const text = m.text ?? "";
+      if (!isSlackBotMention(text)) continue;
+
+      const messageKey = `${channel}:${m.ts}`;
+      if (seenSlackMessageKeys.has(messageKey)) continue;
+      seenSlackMessageKeys.add(messageKey);
+      setTimeout(() => seenSlackMessageKeys.delete(messageKey), 24 * 60 * 60 * 1000).unref();
+
+      const cleaned = cleanSlackMentionText(text);
+      if (!cleaned) continue;
+
+      const eventId = `poll:${channel}:${m.ts}`;
+      const threadTs = m.thread_ts ?? m.ts;
+      const sessionId = `slack:channel:poll:${channel}:thread:${threadTs}`;
+      recordSlackDebug({
+        stage: "received",
+        reason: "poll fallback",
+        eventId,
+        eventType: "message",
+        channel,
+        channelType: "channel",
+        user: m.user,
+        textPreview: text,
+      });
+      recordSlackDebug({
+        stage: "routed",
+        reason: "channel",
+        eventId,
+        eventType: "message",
+        channel,
+        channelType: "channel",
+        user: m.user,
+        sessionId,
+        textPreview: cleaned,
+      });
+
+      setImmediate(async () => {
+        const initial = await postSlackMessage({
+          channel,
+          threadTs,
+          text: "I'm looking into this now. (poll fallback) I'll use this Slack thread as the session context.",
+        });
+        if (!initial.ok) {
+          recordSlackDebug({
+            stage: "post_failed",
+            reason: "initial acknowledgement failed",
+            eventId,
+            eventType: "message",
+            channel,
+            channelType: "channel",
+            user: m.user,
+            sessionId,
+            slackError: initial.error,
+          });
+          return;
+        }
+        recordSlackDebug({
+          stage: "posted",
+          reason: "initial acknowledgement sent",
+          eventId,
+          eventType: "message",
+          channel,
+          channelType: "channel",
+          user: m.user,
+          sessionId,
+        });
+
+        let buffered = "";
+        let lastProgressAt = 0;
+        await runRootChat({
+          sessionId,
+          message: cleaned,
+          onDelta: async (delta) => {
+            buffered += delta;
+            const now = Date.now();
+            if (buffered.trim() && now - lastProgressAt > 15_000) {
+              lastProgressAt = now;
+              await postSlackMessage({
+                channel,
+                threadTs,
+                text: truncateSlackText(buffered.trim()),
+              });
+              buffered = "";
+            }
+          },
+          onReproStart: async (replySoFar) => {
+            await postSlackMessage({
+              channel,
+              threadTs,
+              text:
+                truncateSlackText(replySoFar.trim()) ||
+                "Starting the repro run now. You can also watch it in the runs dashboard.",
+            });
+          },
+          onDone: async (reply) => {
+            await postSlackMessage({
+              channel,
+              threadTs,
+              text: truncateSlackText(reply),
+            });
+          },
+          onError: async (error) => {
+            await postSlackMessage({
+              channel,
+              threadTs,
+              text: `Sorry, I hit an error: ${truncateSlackText(error.message, 1_500)}`,
+            });
+          },
+        });
+      });
+    }
+  }
 }
 
 async function postSlackMessage(args: {

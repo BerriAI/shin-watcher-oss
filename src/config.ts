@@ -58,6 +58,9 @@ export const config = {
     signingSecret: optional("SLACK_SIGNING_SECRET", ""),
     botToken: optional("SLACK_BOT_TOKEN", ""),
     botUserId: optional("SLACK_BOT_USER_ID", ""),
+    pollEnabled: bool("SLACK_POLL_ENABLED", false),
+    pollChannels: optional("SLACK_POLL_CHANNELS", ""),
+    pollIntervalSec: int("SLACK_POLL_INTERVAL_SEC", 10),
   },
   schedule: {
     intervalMin: int("INTERVAL_MIN", 15),
