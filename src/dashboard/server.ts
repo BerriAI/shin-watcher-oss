@@ -11,6 +11,7 @@ import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import { Picker } from "../picker.js";
 import { State } from "../state.js";
 import { runRootChat } from "../chat/rootChat.js";
+import { startSlackBolt } from "../slack/bolt.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.join(__dirname, "ui");
@@ -101,9 +102,16 @@ export function startDashboard(port = 3333): void {
     res.redirect("/login");
   });
 
-  // ── Slack Events API ─────────────────────────────────────────────────────
+  const boltSocketMode =
+    config.slack.useBolt &&
+    Boolean(config.slack.appToken) &&
+    Boolean(config.slack.botToken);
+  // ── Slack Events API (legacy HTTP path) ──────────────────────────────────
   // Public endpoint: Slack authenticates via X-Slack-Signature, not dashboard auth.
-  app.post("/slack/events", handleSlackEvents);
+  // When Bolt Socket Mode is enabled, this route is not used.
+  if (!boltSocketMode) {
+    app.post("/slack/events", handleSlackEvents);
+  }
 
   app.use(requireDashboardAuth);
   app.use("/ui", express.static(UI_DIR));
@@ -512,7 +520,7 @@ export function startDashboard(port = 3333): void {
   // ── Slack poll fallback ──────────────────────────────────────────────────
   // If Slack Events API delivery is flaky, this can still pick up channel
   // mentions by polling recent history.
-  if (config.slack.pollEnabled) {
+  if (config.slack.pollEnabled && !boltSocketMode) {
     const channels = config.slack.pollChannels
       .split(",")
       .map((c) => c.trim())
@@ -537,6 +545,11 @@ export function startDashboard(port = 3333): void {
 
   app.listen(port, () => {
     console.log(`\n  Dashboard  →  http://localhost:${port}\n`);
+    if (boltSocketMode) {
+      void startSlackBolt().catch((e) =>
+        console.error("[slack-bolt] failed to start:", e)
+      );
+    }
   });
 }
 

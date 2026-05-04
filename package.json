@@ -21,6 +21,7 @@
     "@mariozechner/pi-ai": "^0.71.1",
     "@modelcontextprotocol/sdk": "^1.0.4",
     "@octokit/rest": "^21.0.2",
+    "@slack/bolt": "^4.7.2",
     "better-sqlite3": "^11.7.0",
     "dotenv": "^16.4.5",
     "express": "^5.2.1",

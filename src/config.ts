@@ -55,9 +55,11 @@ export const config = {
     targetRepo: optional("TARGET_REPO_NAME", "litellm"),
   },
   slack: {
+    useBolt: bool("SLACK_USE_BOLT", true),
     signingSecret: optional("SLACK_SIGNING_SECRET", ""),
     botToken: optional("SLACK_BOT_TOKEN", ""),
     botUserId: optional("SLACK_BOT_USER_ID", ""),
+    appToken: optional("SLACK_APP_TOKEN", ""),
     pollEnabled: bool("SLACK_POLL_ENABLED", false),
     pollChannels: optional("SLACK_POLL_CHANNELS", ""),
     pollIntervalSec: int("SLACK_POLL_INTERVAL_SEC", 10),
