@@ -23,6 +23,7 @@ const UI_DIR = path.join(__dirname, "ui");
 /** Unix ms timestamp of when the next scheduled batch will fire. 0 = scheduler disabled. */
 let nextBatchAt = 0;
 const seenSlackEvents = new Set<string>();
+const slackDebugEvents: SlackDebugEvent[] = [];
 
 async function runBatch(batchSize: number): Promise<void> {
   const state = new State(config.paths.stateDb);
@@ -124,6 +125,16 @@ export function startDashboard(port = 3333): void {
         startedAt: r.startedAt,
         phase: r.phase,
       })),
+    });
+  });
+
+  app.get("/api/slack/debug", (_req, res) => {
+    res.json({
+      configured: {
+        signingSecret: Boolean(config.slack.signingSecret),
+        botToken: Boolean(config.slack.botToken),
+      },
+      recent: slackDebugEvents.slice(0, 50),
     });
   });
 
@@ -503,6 +514,22 @@ export function startDashboard(port = 3333): void {
 
 type SlackRequest = Request & { rawBody?: Buffer };
 
+interface SlackDebugEvent {
+  ts: string;
+  stage: "received" | "ignored" | "routed" | "posted" | "post_failed" | "signature_failed";
+  reason?: string;
+  eventId?: string;
+  envelopeType?: string;
+  eventType?: string;
+  subtype?: string;
+  channel?: string;
+  channelType?: string;
+  user?: string;
+  sessionId?: string;
+  textPreview?: string;
+  slackError?: string;
+}
+
 interface SlackEventEnvelope {
   type?: string;
   challenge?: string;
@@ -527,34 +554,96 @@ function captureRawBody(req: Request, _res: Response, buf: Buffer): void {
 
 function handleSlackEvents(req: Request, res: Response): void {
   if (!verifySlackSignature(req as SlackRequest)) {
+    recordSlackDebug({
+      stage: "signature_failed",
+      reason: "Slack signature verification failed",
+    });
     res.status(401).send("invalid slack signature");
     return;
   }
 
   const body = req.body as SlackEventEnvelope;
+  recordSlackDebug({
+    stage: "received",
+    eventId: body.event_id,
+    envelopeType: body.type,
+    eventType: body.event?.type,
+    subtype: body.event?.subtype,
+    channel: body.event?.channel,
+    channelType: body.event?.channel_type,
+    user: body.event?.user,
+    textPreview: body.event?.text,
+  });
+
   if (body.type === "url_verification") {
+    recordSlackDebug({
+      stage: "routed",
+      reason: "url_verification challenge",
+      envelopeType: body.type,
+    });
     res.json({ challenge: body.challenge });
     return;
   }
 
   if (body.type !== "event_callback") {
+    recordSlackDebug({
+      stage: "ignored",
+      reason: "not event_callback",
+      eventId: body.event_id,
+      envelopeType: body.type,
+    });
     res.status(200).send("ok");
     return;
   }
 
   const event = body.event;
   if (!event || event.bot_id || event.subtype || !event.channel || !event.ts) {
+    recordSlackDebug({
+      stage: "ignored",
+      reason: !event
+        ? "missing event"
+        : event.bot_id
+          ? "bot event"
+          : event.subtype
+            ? `subtype ${event.subtype}`
+            : "missing channel or ts",
+      eventId: body.event_id,
+      eventType: event?.type,
+      subtype: event?.subtype,
+      channel: event?.channel,
+      channelType: event?.channel_type,
+      user: event?.user,
+      textPreview: event?.text,
+    });
     res.status(200).send("ok");
     return;
   }
 
   const route = classifySlackEvent(event);
   if (!route) {
+    recordSlackDebug({
+      stage: "ignored",
+      reason: "not app_mention or message.im",
+      eventId: body.event_id,
+      eventType: event.type,
+      channel: event.channel,
+      channelType: event.channel_type,
+      user: event.user,
+      textPreview: event.text,
+    });
     res.status(200).send("ok");
     return;
   }
 
   if (body.event_id && seenSlackEvents.has(body.event_id)) {
+    recordSlackDebug({
+      stage: "ignored",
+      reason: "duplicate event_id",
+      eventId: body.event_id,
+      eventType: event.type,
+      channel: event.channel,
+      channelType: event.channel_type,
+    });
     res.status(200).send("ok");
     return;
   }
@@ -572,6 +661,17 @@ function handleSlackEvents(req: Request, res: Response): void {
       ? `slack:direct:${teamId}:${event.channel}:${event.user ?? "unknown"}`
       : `slack:channel:${teamId}:${event.channel}:thread:${threadTs}`;
   const message = route.message;
+  recordSlackDebug({
+    stage: "routed",
+    reason: route.kind,
+    eventId: body.event_id,
+    eventType: event.type,
+    channel: event.channel,
+    channelType: event.channel_type,
+    user: event.user,
+    sessionId,
+    textPreview: message,
+  });
 
   setImmediate(async () => {
     const initial = await postSlackMessage({
@@ -628,6 +728,28 @@ function handleSlackEvents(req: Request, res: Response): void {
 
     if (!initial.ok) {
       console.warn("[slack] initial post failed:", initial.error);
+      recordSlackDebug({
+        stage: "post_failed",
+        reason: "initial acknowledgement failed",
+        eventId: body.event_id,
+        eventType: event.type,
+        channel: event.channel,
+        channelType: event.channel_type,
+        user: event.user,
+        sessionId,
+        slackError: initial.error,
+      });
+    } else {
+      recordSlackDebug({
+        stage: "posted",
+        reason: "initial acknowledgement sent",
+        eventId: body.event_id,
+        eventType: event.type,
+        channel: event.channel,
+        channelType: event.channel_type,
+        user: event.user,
+        sessionId,
+      });
     }
   });
 }
@@ -654,6 +776,27 @@ function cleanSlackMentionText(text: string): string {
   return text.replace(/<@[A-Z0-9]+>/g, "").trim();
 }
 
+function recordSlackDebug(event: Omit<SlackDebugEvent, "ts">): void {
+  const entry: SlackDebugEvent = {
+    ts: new Date().toISOString(),
+    ...event,
+    textPreview:
+      typeof event.textPreview === "string"
+        ? truncateSlackText(event.textPreview.replace(/\s+/g, " "), 180)
+        : undefined,
+  };
+  slackDebugEvents.unshift(entry);
+  slackDebugEvents.length = Math.min(slackDebugEvents.length, 100);
+  console.log(
+    `[slack] ${entry.stage}` +
+      (entry.reason ? ` reason=${entry.reason}` : "") +
+      (entry.eventType ? ` event=${entry.eventType}` : "") +
+      (entry.channel ? ` channel=${entry.channel}` : "") +
+      (entry.channelType ? ` channel_type=${entry.channelType}` : "") +
+      (entry.sessionId ? ` session=${entry.sessionId}` : "")
+  );
+}
+
 function classifySlackEvent(
   event: NonNullable<SlackEventEnvelope["event"]>
 ): { kind: "direct" | "channel"; message: string } | null {
@@ -671,7 +814,28 @@ function classifySlackEvent(
     return message ? { kind: "channel", message } : null;
   }
 
+  // OpenClaw-style fallback: if the workspace subscribes to message.channels
+  // / message.groups, we still require an explicit bot mention before routing.
+  if (
+    event.type === "message" &&
+    ["channel", "group", "mpim"].includes(event.channel_type ?? "") &&
+    isSlackBotMention(text)
+  ) {
+    const message = cleanSlackMentionText(text);
+    return message ? { kind: "channel", message } : null;
+  }
+
   return null;
+}
+
+function isSlackBotMention(text: string): boolean {
+  if (config.slack.botUserId) {
+    return text.includes(`<@${config.slack.botUserId}>`);
+  }
+  // Fallback for local/dev when bot user id is not configured. This is still
+  // mention-gated but may route messages mentioning other users too, so set
+  // SLACK_BOT_USER_ID in production.
+  return /<@[A-Z0-9]+>/.test(text);
 }
 
 async function postSlackMessage(args: {

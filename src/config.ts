@@ -57,6 +57,7 @@ export const config = {
   slack: {
     signingSecret: optional("SLACK_SIGNING_SECRET", ""),
     botToken: optional("SLACK_BOT_TOKEN", ""),
+    botUserId: optional("SLACK_BOT_USER_ID", ""),
   },
   schedule: {
     intervalMin: int("INTERVAL_MIN", 15),
