@@ -102,15 +102,10 @@ export function startDashboard(port = 3333): void {
     res.redirect("/login");
   });
 
-  const boltSocketMode =
-    config.slack.useBolt &&
-    Boolean(config.slack.appToken) &&
-    Boolean(config.slack.botToken);
-  // ── Slack Events API (legacy HTTP path) ──────────────────────────────────
-  // Public endpoint: Slack authenticates via X-Slack-Signature, not dashboard auth.
-  // When Bolt Socket Mode is enabled, this route is not used.
-  if (!boltSocketMode) {
-    app.post("/slack/events", handleSlackEvents);
+  const boltEnabled = config.slack.useBolt;
+  // Bolt-only mode: no HTTP Slack ingestion route.
+  if (!boltEnabled) {
+    console.warn("[slack] Slack integration disabled (SLACK_USE_BOLT=false)");
   }
 
   app.use(requireDashboardAuth);
@@ -517,35 +512,11 @@ export function startDashboard(port = 3333): void {
     );
   }
 
-  // ── Slack poll fallback ──────────────────────────────────────────────────
-  // If Slack Events API delivery is flaky, this can still pick up channel
-  // mentions by polling recent history.
-  if (config.slack.pollEnabled && !boltSocketMode) {
-    const channels = config.slack.pollChannels
-      .split(",")
-      .map((c) => c.trim())
-      .filter(Boolean);
-    if (channels.length === 0) {
-      console.warn("[slack] polling enabled but SLACK_POLL_CHANNELS is empty");
-    } else if (!config.slack.botToken) {
-      console.warn("[slack] polling enabled but SLACK_BOT_TOKEN is missing");
-    } else {
-      const intervalMs = Math.max(3, config.slack.pollIntervalSec) * 1_000;
-      const runPoll = () =>
-        pollSlackChannels(channels).catch((e) =>
-          console.error("[slack] poll error:", e)
-        );
-      setTimeout(runPoll, 2_000);
-      setInterval(runPoll, intervalMs);
-      console.log(
-        `  Slack Poll  →  every ${Math.max(3, config.slack.pollIntervalSec)}s on ${channels.join(", ")}`
-      );
-    }
-  }
+  // Slack poll fallback intentionally disabled in Bolt-only mode.
 
   app.listen(port, () => {
     console.log(`\n  Dashboard  →  http://localhost:${port}\n`);
-    if (boltSocketMode) {
+    if (boltEnabled) {
       void startSlackBolt().catch((e) =>
         console.error("[slack-bolt] failed to start:", e)
       );
