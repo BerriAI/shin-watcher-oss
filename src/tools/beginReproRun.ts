@@ -9,14 +9,23 @@ import type { CandidateIssue } from "../picker.js";
 let portCounter = config.proxy.port;
 
 const BeginReproParams = Type.Object({
-  issue_number: Type.Number({
-    description: "GitHub issue number to reproduce.",
-  }),
+  issue_number: Type.Optional(
+    Type.Number({
+      description:
+        "GitHub issue number to reproduce. Omit for a free-form issue pasted directly into chat.",
+    })
+  ),
   issue_title: Type.Optional(
     Type.String({ description: "Issue title (for dashboard display)." })
   ),
   issue_url: Type.Optional(
     Type.String({ description: "Full GitHub issue URL." })
+  ),
+  issue_body: Type.Optional(
+    Type.String({
+      description:
+        "Free-form issue description pasted by the user. Use when there is no GitHub issue URL/number.",
+    })
   ),
   plan_summary: Type.Optional(
     Type.String({
@@ -50,7 +59,12 @@ export function makeBeginReproRunTool(opts: {
     parameters: BeginReproParams,
     execute: async (_id, params: Static<typeof BeginReproParams>) => {
       const ts = new Date().toISOString().replace(/[:.]/g, "-");
-      const taskId = `${ts}__issue-${params.issue_number}`;
+      const hasGithubIssue = typeof params.issue_number === "number";
+      const title = params.issue_title ?? (hasGithubIssue ? `Issue #${params.issue_number}` : "Chat issue");
+      const syntheticNumber = params.issue_number ?? 0;
+      const taskId = hasGithubIssue
+        ? `${ts}__issue-${params.issue_number}`
+        : `${ts}__chat-issue`;
       const runDir = path.join(config.paths.runs, taskId);
       const screenshotDir = path.join(runDir, "screenshots");
       const workdir = path.join(config.paths.workdir, taskId, "litellm");
@@ -61,12 +75,14 @@ export function makeBeginReproRunTool(opts: {
       fs.mkdirSync(path.dirname(workdir), { recursive: true });
 
       const issue: CandidateIssue = {
-        number: params.issue_number,
-        title: params.issue_title ?? `Issue #${params.issue_number}`,
-        body: params.plan_summary ?? "",
+        number: syntheticNumber,
+        title,
+        body: params.issue_body ?? params.plan_summary ?? "",
         htmlUrl:
           params.issue_url ??
-          `https://github.com/${config.github.targetOwner}/${config.github.targetRepo}/issues/${params.issue_number}`,
+          (hasGithubIssue
+            ? `https://github.com/${config.github.targetOwner}/${config.github.targetRepo}/issues/${params.issue_number}`
+            : ""),
         author: "",
         labels: [],
         createdAt: new Date().toISOString(),

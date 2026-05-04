@@ -233,20 +233,26 @@ async function load() {
   if (!status.active?.length) {
     grid.innerHTML = '<div class="empty">No active runs right now.</div>';
   } else {
-    grid.innerHTML = status.active.map(r => `
+    grid.innerHTML = status.active.map(r => {
+      const isGithubIssue = Number(r.issueNumber) > 0 && r.issueUrl;
+      const issueLabel = isGithubIssue ? `#${r.issueNumber}` : 'Chat issue';
+      const issueLink = isGithubIssue
+        ? `<a href="${escHtml(r.issueUrl)}" target="_blank" rel="noopener">${issueLabel} ↗</a>`
+        : '<span style="font-size:11px;color:var(--muted);flex-shrink:0">chat</span>';
+      return `
       <div class="run-card">
         <div class="pulse" style="${r.phase === 'queued' ? 'background:var(--yellow)' : ''}"></div>
         <div class="run-card-body">
-          <div class="run-card-title">#${r.issueNumber} — ${escHtml(r.issueTitle ?? '')}</div>
+          <div class="run-card-title">${issueLabel} — ${escHtml(r.issueTitle ?? '')}</div>
           <div class="run-card-meta">
             <span>${r.phase === 'queued' ? 'Queued' : 'Started'} ${relTime(new Date(r.startedAt).toISOString())}</span>
             <span class="phase-badge ${r.phase === 'queued' ? 'phase-queued' : ''}">${r.phase}</span>
             ${r.taskId && r.phase !== 'queued' ? `<span style="color:var(--muted);font-size:10px">${r.taskId.slice(0, 24)}…</span>` : ''}
           </div>
         </div>
-        <a href="${issueUrl(r.issueNumber)}" target="_blank" rel="noopener">#${r.issueNumber} ↗</a>
+        ${issueLink}
       </div>
-    `).join('');
+    `}).join('');
   }
 
   // History
