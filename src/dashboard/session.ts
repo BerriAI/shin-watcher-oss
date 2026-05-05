@@ -8,6 +8,7 @@ import {
 } from "@mariozechner/pi-agent-core";
 import type { Message } from "@mariozechner/pi-ai";
 import { config } from "../config.js";
+import { loadProfile, type Profile } from "../profile.js";
 import { buildLiteLlmModel, getLiteLlmApiKey } from "../model.js";
 import { makeShellTool } from "../tools/shell.js";
 import { makeCurlTool } from "../tools/curl.js";
@@ -64,6 +65,7 @@ export interface RootSession {
 class SessionManagerImpl {
   private sessions = new Map<string, RootSession>();
   private state = new State(config.paths.stateDb);
+  private profile: Profile = loadProfile(config.profile);
   private gcInterval: ReturnType<typeof setInterval>;
 
   constructor() {
@@ -147,6 +149,7 @@ class SessionManagerImpl {
         makeCurlTool() as AgentTool,
         makeStitchGifTool() as AgentTool,
         makeBeginReproRunTool({
+          profile: this.profile,
           chatSessionId: sessionId,
           onBegin: (taskId, workdir, proxyPort) => {
             const s = sessionRef.obj;
@@ -238,7 +241,7 @@ class SessionManagerImpl {
 
       const agent = new Agent({
         initialState: {
-          systemPrompt: buildRootSystemPrompt(),
+          systemPrompt: buildRootSystemPrompt(this.profile),
           model: buildLiteLlmModel(),
           thinkingLevel: "high",
           tools,

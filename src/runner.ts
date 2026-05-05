@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config.js";
+import { loadProfile, type Profile } from "./profile.js";
 import { State } from "./state.js";
 import { Picker, type CandidateIssue } from "./picker.js";
 import {
@@ -25,7 +26,7 @@ import { LiveBus } from "./dashboard/live.js";
  *
  *   - issue selection + cooldowns          → picker + state
  *   - working tree management              → proxy.prepareWorkdir
- *   - litellm proxy lifecycle              → proxy.startProxy
+ *   - target service lifecycle             → proxy.startProxy
  *   - bot fork existence + git remote      → github.ensureFork / ensureBotRemote
  *   - hard timeout                         → setTimeout + agent.abort()
  *   - state persistence + cooldowns        → state.recordAttempt
@@ -42,8 +43,10 @@ function allocatePort(): number { return nextPort++; }
 export class Runner {
   private state: State;
   private picker: Picker;
+  private profile: Profile;
 
   constructor() {
+    this.profile = loadProfile(config.profile);
     this.state = new State(config.paths.stateDb);
     this.picker = new Picker(
       config.github.token,
@@ -108,8 +111,8 @@ export class Runner {
       // 1. Prepare working tree — each run gets its own isolated clone so
       //    concurrent runs don't clobber each other's git state.
       const workdir = await prepareWorkdir({
-        workdir: path.join(config.paths.workdir, taskId, "litellm"),
-        ref: "main",
+        workdir: path.join(config.paths.workdir, taskId, this.profile.name),
+        profile: this.profile,
       });
 
       LiveBus.setupRun(taskId, issue, opts?.chatSessionId, "Checking GitHub fork / remotes");
@@ -120,14 +123,20 @@ export class Runner {
         ensureBotRemote(workdir);
       }
 
-      LiveBus.setupRun(taskId, issue, opts?.chatSessionId, "Starting local LiteLLM proxy");
-      // 3. Start the local litellm proxy on an allocated port (unique per run)
+      LiveBus.setupRun(
+        taskId,
+        issue,
+        opts?.chatSessionId,
+        `Starting local ${this.profile.name} service`
+      );
+      // 3. Start the target service on an allocated port (unique per run)
       //    with ephemeral admin credentials scoped to this run only.
       const proxyPort = allocatePort();
       const proxyCreds = generateProxyCredentials();
       proxy = await startProxy({
         workdir,
         port: proxyPort,
+        profile: this.profile,
         masterKey: proxyCreds.masterKey,
         uiUsername: proxyCreds.uiUsername,
         uiPassword: proxyCreds.uiPassword,
@@ -152,6 +161,7 @@ export class Runner {
         reportPath,
         taskId,
         fixEnabled,
+        profile: this.profile,
         proxyPort,
         proxyMasterKey: proxyCreds.masterKey,
         proxyUiUsername: proxyCreds.uiUsername,
@@ -266,7 +276,7 @@ function buildInitialPublicPlan(issue: CandidateIssue): string {
   return [
     `I have the issue loaded: **#${issue.number} ${issue.title}**.`,
     bodyHint ? `Initial read: ${bodyHint}` : "Initial read: the issue body is empty, so I will rely on the title and comments first.",
-    "Plan: boot an isolated LiteLLM worktree, start a local proxy, then use the repro agent to verify the reported behavior with API/browser evidence.",
+    "Plan: boot an isolated worktree of the target repo, start a local service, then use the repro agent to verify the reported behavior with API/browser evidence.",
     "Once the agent runtime is ready, it will stream its own observations and adjust the repro path from the actual results.",
   ].join("\n\n");
 }

@@ -36,6 +36,8 @@ function int(name: string, fallback: number): number {
 const repoRoot = process.cwd();
 
 export const config = {
+  /** Active profile name. Selects which `profiles/<name>/` bundle is loaded at startup. */
+  profile: optional("PROFILE", "litellm"),
   litellm: {
     baseUrl: required("LITELLM_BASE_URL"),
     apiKey: required("LITELLM_API_KEY"),

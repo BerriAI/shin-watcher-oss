@@ -1,26 +1,43 @@
-import fs from "node:fs";
-import path from "node:path";
 import { feedbackSkill } from "self-improving-agent";
 import { config } from "../config.js";
+import { interpolate, type Profile } from "../profile.js";
 
 /**
  * System prompt for the root agent that lives for the full chat session.
  *
- * Mode 1 – CHAT: answer questions about LiteLLM in plain language.
+ * Mode 1 – CHAT: answer questions about the active profile's target in plain language.
  * Mode 2 – REPRO: autonomously reproduce a GitHub issue end-to-end.
  *
- * The repro skill is inlined from skills/plan_repro.md with adaptations
- * for the root architecture (agent must clone the repo and start the proxy
+ * The repro skill is taken from the active profile's `repro.md` with adaptations
+ * for the root architecture (agent must clone the repo and start the service
  * itself instead of receiving them pre-made).
  */
-export function buildRootSystemPrompt(): string {
-  const planReproSkill = fs.readFileSync(
-    path.join(config.paths.skills, "plan_repro.md"),
-    "utf-8"
+export function buildRootSystemPrompt(profile: Profile): string {
+  const planReproSkill = profile.repro;
+
+  // Render the profile's start command and env vars with placeholders the agent
+  // will substitute in shell when it has the actual values from begin_repro_run.
+  const renderedStartCommand = interpolate(profile.start.command, {
+    port: "<proxyPort>",
+    master_key: "<proxyMasterKey>",
+    ui_username: "<proxyUiUsername>",
+    ui_password: "<proxyUiPassword>",
+  });
+  const renderedHealthCheck = interpolate(profile.healthCheck.url, {
+    port: "<proxyPort>",
+  });
+  const exportLines = Object.entries(profile.start.env).map(
+    ([key, value]) =>
+      `export ${key}=${interpolate(value, {
+        port: "<proxyPort>",
+        master_key: "<proxyMasterKey>",
+        ui_username: "<proxyUiUsername>",
+        ui_password: "<proxyUiPassword>",
+      })}`
   );
 
   return [
-    "You are shin-watcher, the AI assistant and autonomous reproducer for BerriAI/litellm.",
+    profile.prompt.trim(),
     "",
     "You operate in three modes:",
     "  CHAT     — answer questions, explain concepts, brainstorm fixes.",
@@ -58,11 +75,12 @@ export function buildRootSystemPrompt(): string {
     "  • plan_summary — 1–2 sentences: what the issue title suggests + your initial repro plan",
     "begin_repro_run returns:",
     "  taskId        — unique run ID (used to name screenshots and in write_report)",
-    "  workdir       — absolute path where you must clone litellm",
+    `  workdir       — absolute path where you must clone ${profile.name}`,
     "  screenshotDir — where to save ALL screenshots (MANDATORY — not /tmp/)",
     "  reportPath    — passed to write_report at the end",
-    "  proxyPort     — the port to start the LiteLLM proxy on (use this, never 4000)",
+    "  proxyPort     — the port to start the target service on (use this, never 4000)",
     "  proxyMasterKey / proxyUiUsername / proxyUiPassword",
+    "  cloneUrl      — git URL of the target repo (use this in step 0C)",
     "  sandboxDbUrl  — DATABASE_URL for the proxy (may be null)",
     "",
     "STEP 0B — Read the full issue",
@@ -72,24 +90,22 @@ export function buildRootSystemPrompt(): string {
     "",
     "STEP 0C — Clone the repo",
     "```bash",
-    "git clone --depth 50 https://github.com/BerriAI/litellm.git <workdir>",
+    "git clone --depth 50 <cloneUrl> <workdir>",
     "```",
-    "Use the `workdir` returned by begin_repro_run. This may take 1–2 minutes.",
+    "Use the `cloneUrl` and `workdir` returned by begin_repro_run. This may take 1–2 minutes.",
     "",
-    "STEP 0D — Start the proxy",
+    "STEP 0D — Start the target service",
     "Use `proxyPort` from begin_repro_run. NEVER use port 4000 directly. Run from inside <workdir>:",
     "```bash",
-    "export LITELLM_MASTER_KEY=<proxyMasterKey>",
-    "export UI_USERNAME=<proxyUiUsername>",
-    "export UI_PASSWORD=<proxyUiPassword>",
-    "[ -n \"<sandboxDbUrl>\" ] && export DATABASE_URL=<sandboxDbUrl>",
-    "nohup uv run --extra proxy litellm --config proxy_server_config.yaml --port <proxyPort> \\",
+    ...exportLines,
+    '[ -n "<sandboxDbUrl>" ] && export DATABASE_URL=<sandboxDbUrl>',
+    `nohup ${renderedStartCommand} \\`,
     "  > <runDir>/proxy.log 2>&1 &",
     "for i in $(seq 1 30); do",
-    "  curl -sf http://localhost:<proxyPort>/health/readiness && break || sleep 2",
+    `  curl -sf ${renderedHealthCheck} && break || sleep 2`,
     "done",
     "```",
-    "If the proxy fails after 30 attempts, show the last 30 lines of proxy.log and continue with curl-only reproduction.",
+    "If the service fails after 30 attempts, show the last 30 lines of proxy.log and continue with curl-only reproduction.",
     "",
     "STEP 0E — Screenshot directory reminder",
     "Replace all `{{TASK_ID}}` references in the skill steps below with the actual `taskId`.",
@@ -129,13 +145,13 @@ export function buildRootSystemPrompt(): string {
     "  Turn 2 (first tool call): Call begin_repro_run. This MUST be your very first tool call.",
     "                      Do not call github_get_issue, shell, curl, or any other tool first.",
     "                      For pasted/free-form issues, omit issue_number and include issue_body.",
-    "  Turn 3+: Clone, start proxy, run repro steps — all using paths returned by begin_repro_run.",
+    "  Turn 3+: Clone, start service, run repro steps — all using paths returned by begin_repro_run.",
     "",
     "ISOLATION — non-negotiable:",
     "  • NEVER test against any existing service (localhost:4000 or any other port).",
     "    That server is the LLM router used for your own AI calls — not a test target.",
-    "  • ALWAYS clone a fresh litellm repo to the `workdir` returned by begin_repro_run.",
-    "  • ALWAYS start a new proxy on the `proxyPort` returned by begin_repro_run.",
+    `  • ALWAYS clone a fresh ${profile.name} repo to the \`workdir\` returned by begin_repro_run.`,
+    "  • ALWAYS start a new service on the `proxyPort` returned by begin_repro_run.",
     "  • These rules apply even if a server is already listening on that port.",
     "",
     "SCREENSHOTS — non-negotiable:",
@@ -153,7 +169,7 @@ export function buildRootSystemPrompt(): string {
     "════════════════════════════════════════════════════════════",
     "SELF-IMPROVEMENT (FEEDBACK MODE)",
     "════════════════════════════════════════════════════════════",
-    "When the user is critiquing YOU (your prompts, tools, skills, decision-making) and asking you to fix yourself — not asking you to repro a LiteLLM bug — use the feedback tools below. Do NOT spin up begin_repro_run for self-feedback.",
+    `When the user is critiquing YOU (your prompts, tools, skills, decision-making) and asking you to fix yourself — not asking you to repro a ${profile.name} bug — use the feedback tools below. Do NOT spin up begin_repro_run for self-feedback.`,
     "",
     feedbackSkill,
   ].join("\n");

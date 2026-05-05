@@ -5,6 +5,7 @@ import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { config } from "../config.js";
 import { LiveBus } from "../dashboard/live.js";
 import type { CandidateIssue } from "../picker.js";
+import type { Profile } from "../profile.js";
 import { generateProxyCredentials, SANDBOX_PROXY_PORT_START } from "../proxy.js";
 
 let portCounter = SANDBOX_PROXY_PORT_START;
@@ -45,6 +46,7 @@ export type BeginReproCallback = (taskId: string, workdir: string, proxyPort: nu
  * issue readout before any cloning starts.
  */
 export function makeBeginReproRunTool(opts: {
+  profile: Profile;
   chatSessionId?: string;
   onBegin: BeginReproCallback;
   onEndRun?: (taskId: string, verdict?: number, reasoning?: string) => void;
@@ -54,7 +56,7 @@ export function makeBeginReproRunTool(opts: {
     label: "Begin Repro Run",
     description:
       "Call this FIRST before any repro work. Creates an isolated run directory, allocates a proxy port, and registers the run with the dashboard. " +
-      "Returns taskId, workdir (clone litellm here), screenshotDir, reportPath, proxyPort, and proxy credentials. " +
+      `Returns taskId, workdir (clone ${opts.profile.name} here), screenshotDir, reportPath, proxyPort, and proxy credentials. ` +
       "Use taskId when naming screenshots (prefix every filename with taskId_). " +
       "Pass taskId to write_report when done.",
     parameters: BeginReproParams,
@@ -68,7 +70,7 @@ export function makeBeginReproRunTool(opts: {
         : `${ts}__chat-issue`;
       const runDir = path.join(config.paths.runs, taskId);
       const screenshotDir = path.join(runDir, "screenshots");
-      const workdir = path.join(config.paths.workdir, taskId, "litellm");
+      const workdir = path.join(config.paths.workdir, taskId, opts.profile.name);
       const proxyPort = portCounter++;
       const proxyCreds = generateProxyCredentials();
 
@@ -114,7 +116,7 @@ export function makeBeginReproRunTool(opts: {
                 proxyUiUsername: proxyCreds.uiUsername,
                 proxyUiPassword: proxyCreds.uiPassword,
                 sandboxDbUrl: process.env["LITELLM_SANDBOX_DB_URL"] || null,
-                cloneUrl: `https://github.com/${config.github.targetOwner}/${config.github.targetRepo}.git`,
+                cloneUrl: opts.profile.cloneUrl,
               },
               null,
               2

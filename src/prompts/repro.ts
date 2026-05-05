@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { config } from "../config.js";
 import type { CandidateIssue } from "../picker.js";
+import type { Profile } from "../profile.js";
 
 interface BuildReproPromptOptions {
   issue: CandidateIssue;
@@ -10,6 +11,7 @@ interface BuildReproPromptOptions {
   reportPath: string;
   taskId: string;
   fixEnabled: boolean;
+  profile: Profile;
   proxyPort: number;
   proxyMasterKey: string;
   proxyUiUsername: string;
@@ -43,16 +45,16 @@ GitHub (GitHub MCP):
 `.trim();
 
 export function buildReproSystemPrompt(opts: BuildReproPromptOptions): string {
-  const planReproSkill = readSkill("plan_repro.md");
+  const planReproSkill = opts.profile.repro;
   const implementSkill = opts.fixEnabled ? readSkill("implement.md") : null;
 
   return [
-    "You are shin-watcher, an autonomous bug-reproduction agent for BerriAI/litellm.",
+    opts.profile.prompt.trim(),
     "You run unattended. Do not ask the user anything — if something is unclear, state your assumption in `notes` and proceed.",
     "",
     "ENVIRONMENT:",
-    `  Working dir (litellm clone): ${opts.workdir}`,
-    `  LiteLLM proxy:               http://localhost:${opts.proxyPort} (already running — do NOT start another)`,
+    `  Working dir (${opts.profile.name} clone): ${opts.workdir}`,
+    `  Target service:              http://localhost:${opts.proxyPort} (already running — do NOT start another)`,
     `  Master key:                  ${opts.proxyMasterKey}`,
     `  Admin login:                 ${opts.proxyUiUsername} / ${opts.proxyUiPassword}`,
     `  Screenshot dir:              ${opts.screenshotDir}`,

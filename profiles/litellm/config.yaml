@@ -1,0 +1,31 @@
+# Profile: litellm
+#
+# Default profile shipped with shin-watcher. Reproduces bugs against the
+# BerriAI/litellm proxy server. Used when the PROFILE env var is unset.
+#
+# Placeholders interpolated at runtime per repro run:
+#   {port}          allocated proxy port
+#   {master_key}    generated master key
+#   {ui_username}   generated UI username
+#   {ui_password}   generated UI password
+
+name: litellm
+
+clone_url: https://github.com/BerriAI/litellm.git
+default_ref: main
+
+install:
+  command: uv sync --extra proxy
+
+start:
+  command: uv run --extra proxy litellm --config proxy_server_config.yaml --port {port}
+  env:
+    LITELLM_MASTER_KEY: "{master_key}"
+    UI_USERNAME: "{ui_username}"
+    UI_PASSWORD: "{ui_password}"
+
+health_check:
+  url: http://localhost:{port}/health/readiness
+  timeout_ms: 90000
+
+ui_url: http://localhost:{port}/ui/

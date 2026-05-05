@@ -44,8 +44,8 @@ export function makeCurlTool(opts: CurlToolOptions = {}): AgentTool<typeof CurlP
     name: "curl",
     label: "HTTP",
     description:
-      "Make an HTTP request to the local litellm proxy (localhost only). " +
-      "Use this for /login, /team/new, /user/new, /team/member_add, /project/new, etc. " +
+      "Make an HTTP request to a local service on the proxyPort returned by begin_repro_run (localhost only). " +
+      "See the active profile's repro skill for the specific endpoints to call. " +
       "Response body is truncated to ~64KB. Returns status, headers, and body as text.",
     parameters: CurlParams,
     execute: async (

@@ -94,7 +94,7 @@ export interface AgentBundle {
 }
 
 export interface CreateAgentOptions {
-  /** Working directory the shell tool is sandboxed into (the litellm clone). */
+  /** Working directory the shell tool is sandboxed into (the target repo clone). */
   rootDir: string;
   /** Where Playwright MCP writes screenshots and where stitch_gif puts the GIF. */
   screenshotDir: string;

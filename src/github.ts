@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { config } from "./config.js";
 
 /**
- * One-time setup: make sure the bot account has a fork of BerriAI/litellm.
+ * One-time setup: make sure the bot account has a fork of the target repo.
  *
  * Called from the runner BEFORE the agent runs, so by the time the agent uses
  * `github_fork_repository` (a no-op when the fork exists) or pushes a branch,

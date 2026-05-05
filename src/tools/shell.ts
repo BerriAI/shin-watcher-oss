@@ -75,8 +75,8 @@ export function makeShellTool(opts: ShellToolOptions): AgentTool<typeof ShellPar
     name: "shell",
     label: "Shell",
     description:
-      "Run a shell command in the cloned BerriAI/litellm working tree. Use this for git, uv, curl, ls, cat, pytest, etc. " +
-      "Output is truncated to the last ~64KB. The proxy is already running on :4000 — do NOT start another one.",
+      "Run a shell command in the target repo's cloned working tree. Use this for git, uv, curl, ls, cat, pytest, etc. " +
+      "Output is truncated to the last ~64KB. Use the proxyPort returned by begin_repro_run; do NOT use port 4000.",
     parameters: ShellParams,
     execute: async (
       _toolCallId: string,
