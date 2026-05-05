@@ -96,6 +96,7 @@ export async function startSlackBolt(): Promise<void> {
     const text = cleanSlackMentionText(ev.text ?? "");
     if (!text || !ev.channel || !ev.ts) return;
     if (isDuplicate(eventId, ev.channel, ev.ts)) return;
+    await addAckReaction(client, ev.channel, ev.ts);
 
     await runFromEvent({
       source: "app_mention",
@@ -134,6 +135,7 @@ export async function startSlackBolt(): Promise<void> {
     }
     if (!kind || !message) return;
     if (isDuplicate(eventId, ev.channel, ev.ts)) return;
+    await addAckReaction(client, ev.channel, ev.ts);
 
     await runFromEvent({
       source: "message",
@@ -157,6 +159,25 @@ export async function startSlackBolt(): Promise<void> {
   await app.start();
   started = true;
   console.log("[slack-bolt] Socket Mode started");
+}
+
+async function addAckReaction(
+  client: App["client"],
+  channel: string,
+  ts: string
+): Promise<void> {
+  try {
+    const resp = await client.reactions.add({
+      channel,
+      timestamp: ts,
+      name: "eyes",
+    });
+    if (!resp.ok && resp.error !== "already_reacted") {
+      console.warn(`[slack-bolt] reaction add failed: ${resp.error ?? "unknown"}`);
+    }
+  } catch (e) {
+    console.warn("[slack-bolt] reaction add exception:", e);
+  }
 }
 
 function isDuplicate(eventId: string | undefined, channel: string, ts: string): boolean {
