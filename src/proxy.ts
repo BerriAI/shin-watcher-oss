@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { interpolate, type Profile } from "./profile.js";
 
 export interface ProxyCredentials {
   masterKey: string;
@@ -10,9 +11,9 @@ export interface ProxyCredentials {
 }
 
 /**
- * Generate ephemeral admin credentials for a per-run sandbox LiteLLM proxy.
- * These don't need to be stable — each repro run boots its own isolated proxy
- * on a unique port, so creds are scoped to that single run.
+ * Generate ephemeral admin credentials for a per-run sandbox proxy.
+ * These don't need to be stable — each repro run boots its own isolated
+ * service on a unique port, so creds are scoped to that single run.
  */
 export function generateProxyCredentials(): ProxyCredentials {
   return {
@@ -22,9 +23,11 @@ export function generateProxyCredentials(): ProxyCredentials {
   };
 }
 
-/** Default starting port for per-run sandbox proxies. Bumped from 4000 to
+/**
+ * Default starting port for per-run sandbox services. Bumped from 4000 to
  * avoid collision with the LiteLLM proxy that handles shin-watcher's own
- * LLM calls (LITELLM_BASE_URL). */
+ * LLM calls (LITELLM_BASE_URL).
+ */
 export const SANDBOX_PROXY_PORT_START = 5001;
 
 export interface ProxyHandle {
@@ -36,27 +39,28 @@ export interface ProxyHandle {
 }
 
 export interface PrepareOptions {
-  /** Local path where litellm should be cloned/refreshed. */
+  /** Local path where the target repo should be cloned/refreshed. */
   workdir: string;
-  /** GitHub URL to clone from (defaults to https://github.com/BerriAI/litellm). */
-  cloneUrl?: string;
-  /** Branch/ref to reset to (default "main"). */
+  /** Profile describing the target repo (clone URL, optional install command). */
+  profile: Profile;
+  /** Override the profile's default ref. */
   ref?: string;
 }
 
 /**
- * Make sure ./workdir/litellm exists and is at a clean origin/<ref>.
- * Creates a fresh shallow clone the first time, then `fetch + reset --hard + clean -fdx`
- * on subsequent runs (much faster than re-cloning a 100k-commit repo).
+ * Make sure the workdir exists and is at a clean origin/<ref>, then run
+ * the profile's optional install command. The first call performs a
+ * shallow clone; subsequent calls fetch + reset --hard + clean -fdx
+ * (much faster than re-cloning a 100k-commit repo).
  */
 export async function prepareWorkdir(opts: PrepareOptions): Promise<string> {
-  const cloneUrl = opts.cloneUrl ?? "https://github.com/BerriAI/litellm.git";
-  const ref = opts.ref ?? "main";
+  const { profile } = opts;
+  const ref = opts.ref ?? profile.defaultRef;
   const target = path.resolve(opts.workdir);
   fs.mkdirSync(path.dirname(target), { recursive: true });
 
   if (!fs.existsSync(path.join(target, ".git"))) {
-    await runCommand("git", ["clone", "--depth", "50", cloneUrl, target]);
+    await runCommand("git", ["clone", "--depth", "50", profile.cloneUrl, target]);
   }
 
   // Fetch latest commits. The explicit refspec writes the remote-tracking ref
@@ -69,15 +73,17 @@ export async function prepareWorkdir(opts: PrepareOptions): Promise<string> {
   await runCommand("git", ["reset", "--hard", `origin/${ref}`], target);
   await runCommand("git", ["clean", "-fdx"], target);
 
+  if (profile.install) {
+    const [command, ...args] = splitCommand(profile.install.command);
+    await runCommand(command, args, target);
+  }
+
   return target;
 }
 
 async function runCommand(command: string, args: string[], cwd?: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd,
-      stdio: "inherit",
-    });
+    const child = spawn(command, args, { cwd, stdio: "inherit" });
     child.on("error", reject);
     child.on("exit", (code, signal) => {
       if (code === 0) {
@@ -97,13 +103,15 @@ async function runCommand(command: string, args: string[], cwd?: string): Promis
 export interface StartProxyOptions {
   workdir: string;
   port: number;
+  /** Profile providing the start command, env, and health check. */
+  profile: Profile;
   masterKey: string;
   uiUsername: string;
   uiPassword: string;
   databaseUrl?: string;
   /** Path to write proxy stdout+stderr. */
   logPath: string;
-  /** How long to wait for /health/readiness per attempt in ms (default 90s). */
+  /** How long to wait for readiness per attempt in ms. Default: profile's healthCheck.timeoutMs. */
   readinessTimeoutMs?: number;
   /** Max attempts before giving up (default 3). */
   maxAttempts?: number;
@@ -112,9 +120,10 @@ export interface StartProxyOptions {
 }
 
 /**
- * Start `uv run --extra proxy litellm --config proxy_server_config.yaml --port <port>` from inside
- * the prepared workdir. Resolves once /health/readiness returns 200.
- * Retries up to maxAttempts (default 3) on timeout, calling onRetry between attempts.
+ * Launch the target service inside the prepared workdir using the start
+ * command and env vars from the profile. Resolves once the profile's
+ * health check URL responds with 2xx. Retries up to maxAttempts (default 3)
+ * on timeout, calling onRetry between attempts.
  */
 export async function startProxy(opts: StartProxyOptions): Promise<ProxyHandle> {
   const maxAttempts = opts.maxAttempts ?? 3;
@@ -135,52 +144,49 @@ export async function startProxy(opts: StartProxyOptions): Promise<ProxyHandle> 
     }
   }
 
-  throw new Error(`LiteLLM proxy failed after ${maxAttempts} attempts. Last error: ${lastError}`);
+  throw new Error(
+    `${opts.profile.name} service failed after ${maxAttempts} attempts. Last error: ${lastError}`
+  );
 }
 
 async function startProxyOnce(opts: StartProxyOptions): Promise<ProxyHandle> {
   fs.mkdirSync(path.dirname(opts.logPath), { recursive: true });
   const out = fs.openSync(opts.logPath, "w");
 
+  const placeholders: Record<string, string | number> = {
+    port: opts.port,
+    master_key: opts.masterKey,
+    ui_username: opts.uiUsername,
+    ui_password: opts.uiPassword,
+  };
+
+  const interpolatedCommand = interpolate(opts.profile.start.command, placeholders);
+  const [command, ...args] = splitCommand(interpolatedCommand);
+
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    LITELLM_MASTER_KEY: opts.masterKey,
-    UI_USERNAME: opts.uiUsername,
-    UI_PASSWORD: opts.uiPassword,
+    ...interpolateEnv(opts.profile.start.env, placeholders),
   };
   if (opts.databaseUrl) env.DATABASE_URL = opts.databaseUrl;
 
-  const child: ChildProcess = spawn(
-    "uv",
-    [
-      "run",
-      "--extra",
-      "proxy",
-      "litellm",
-      "--config",
-      "proxy_server_config.yaml",
-      "--port",
-      String(opts.port),
-    ],
-    {
-      cwd: opts.workdir,
-      env,
-      stdio: ["ignore", out, out],
-      detached: true,
-    }
-  );
+  const child: ChildProcess = spawn(command, args, {
+    cwd: opts.workdir,
+    env,
+    stdio: ["ignore", out, out],
+    detached: true,
+  });
 
   if (!child.pid) {
     fs.closeSync(out);
-    throw new Error("Failed to spawn litellm proxy");
+    throw new Error(`Failed to spawn ${opts.profile.name} service`);
   }
   const pid = child.pid;
   child.unref();
 
-  const ready = await waitForReadiness(
-    `http://localhost:${opts.port}/health/readiness`,
-    opts.readinessTimeoutMs ?? 90_000
-  );
+  const healthUrl = interpolate(opts.profile.healthCheck.url, placeholders);
+  const timeoutMs = opts.readinessTimeoutMs ?? opts.profile.healthCheck.timeoutMs;
+
+  const ready = await waitForReadiness(healthUrl, timeoutMs);
   if (!ready) {
     try {
       process.kill(-pid, "SIGTERM");
@@ -190,9 +196,8 @@ async function startProxyOnce(opts: StartProxyOptions): Promise<ProxyHandle> {
     fs.closeSync(out);
     const tail = readTail(opts.logPath, 60);
     throw new Error(
-      `litellm proxy did not become ready on :${opts.port} within ${
-        opts.readinessTimeoutMs ?? 90_000
-      }ms.\n--- last 60 log lines ---\n${tail}`
+      `${opts.profile.name} service did not become ready on :${opts.port} within ${timeoutMs}ms.\n` +
+        `--- last 60 log lines ---\n${tail}`
     );
   }
 
@@ -222,7 +227,31 @@ async function startProxyOnce(opts: StartProxyOptions): Promise<ProxyHandle> {
   };
 }
 
-/** Return just the first non-empty, non-separator line from an error message. */
+function interpolateEnv(
+  env: Record<string, string>,
+  placeholders: Record<string, string | number>
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    result[key] = interpolate(value, placeholders);
+  }
+  return result;
+}
+
+/**
+ * Split a shell-like command string into [command, ...args] by whitespace.
+ * Profile commands are author-controlled, so we don't need to handle
+ * embedded quotes or spaces inside arguments. If a future profile needs
+ * that, swap this for `shell-quote` or similar.
+ */
+function splitCommand(command: string): [string, ...string[]] {
+  const parts = command.trim().split(/\s+/);
+  if (parts.length === 0 || parts[0] === "") {
+    throw new Error("Empty command string");
+  }
+  return parts as [string, ...string[]];
+}
+
 function firstMeaningfulLine(msg: string): string {
   const line = msg.split("\n").find((l) => l.trim() && !l.startsWith("---"));
   return (line ?? msg).slice(0, 200);

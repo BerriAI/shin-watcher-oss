@@ -1,9 +1,10 @@
 /**
  * shin-watcher daemon.
  *
- * Every INTERVAL_MIN, picks the next eligible BerriAI/litellm issue and runs
- * one repro+(optional)fix cycle. Sequential: only one issue is processed at a
- * time, even if the cron tick fires while a previous run is still going.
+ * Every INTERVAL_MIN, picks the next eligible issue on the configured target
+ * repository and runs one repro+(optional)fix cycle. Sequential: only one
+ * issue is processed at a time, even if the cron tick fires while a previous
+ * run is still going.
  */
 import cron from "node-cron";
 import { config } from "./config.js";
@@ -32,8 +33,9 @@ async function main(): Promise<void> {
   console.log(
     `[daemon] starting shin-watcher
   cadence:        ${cronExpr} (every ${config.schedule.intervalMin} min)
+  profile:        ${config.profile}
   target:         ${config.github.targetOwner}/${config.github.targetRepo}
-  litellm proxy:  ${config.litellm.baseUrl}
+  llm proxy:      ${config.litellm.baseUrl}
   model:          ${config.litellm.modelId}
   AUTO_FIX:       ${config.flags.autoFix}
   POST_COMMENTS:  ${config.flags.postComments}
