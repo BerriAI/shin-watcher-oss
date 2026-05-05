@@ -23,10 +23,6 @@ const UI_DIR = path.join(__dirname, "ui");
  */
 /** Unix ms timestamp of when the next scheduled batch will fire. 0 = scheduler disabled. */
 let nextBatchAt = 0;
-const seenSlackEvents = new Set<string>();
-const seenSlackMessageKeys = new Set<string>();
-const slackPollBootstrappedChannels = new Set<string>();
-const slackDebugEvents: SlackDebugEvent[] = [];
 
 async function runBatch(batchSize: number): Promise<void> {
   const state = new State(config.paths.stateDb);
@@ -75,7 +71,7 @@ async function runBatch(batchSize: number): Promise<void> {
 
 export function startDashboard(port = 3333): void {
   const app = express();
-  app.use(express.json({ verify: captureRawBody }));
+  app.use(express.json());
   app.use(express.urlencoded({ extended: false }));
 
   app.get("/login", (_req, res) => {
@@ -130,16 +126,6 @@ export function startDashboard(port = 3333): void {
         startedAt: r.startedAt,
         phase: r.phase,
       })),
-    });
-  });
-
-  app.get("/api/slack/debug", (_req, res) => {
-    res.json({
-      configured: {
-        signingSecret: Boolean(config.slack.signingSecret),
-        botToken: Boolean(config.slack.botToken),
-      },
-      recent: slackDebugEvents.slice(0, 50),
     });
   });
 
