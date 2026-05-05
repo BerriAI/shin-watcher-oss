@@ -37,10 +37,13 @@ export async function startSlackBolt(): Promise<void> {
   });
 
   const runFromEvent = async (args: {
-    source: "app_mention" | "message";
+    source: "app_mention" | "message";  
     eventId?: string;
     event: SlackEventCommon;
+    /** Enriched message (with thread context) — sent to the agent as the prompt. */
     message: string;
+    /** Raw human-typed text — recorded as the Langfuse trace `input`. */
+    rawMessage: string;
     kind: "direct" | "channel";
     post: (text: string, threadTs?: string) => Promise<{ ts: string }>;
     update: (ts: string, text: string, threadTs?: string) => Promise<void>;
@@ -100,7 +103,7 @@ export async function startSlackBolt(): Promise<void> {
       // Langfuse trace shows just the raw human message — the wrapped
       // prompt with thread context is what the agent sees, but it's
       // noisy in the UI.
-      traceInput: args.message,
+      traceInput: args.rawMessage,
       signal: abortController.signal,
       onReport: (payload) => {
         reportPayload = payload;
@@ -196,6 +199,7 @@ export async function startSlackBolt(): Promise<void> {
       eventId,
       event: ev,
       message: enriched,
+      rawMessage: text,
       kind: "channel",
       post: async (text, threadTs) => {
         const resp = await client.chat.postMessage({
@@ -266,6 +270,7 @@ export async function startSlackBolt(): Promise<void> {
       eventId,
       event: ev,
       message: enriched,
+      rawMessage: message,
       kind,
       post: async (text, threadTs) => {
         const resp = await client.chat.postMessage({
