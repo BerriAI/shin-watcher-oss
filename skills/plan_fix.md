@@ -4,6 +4,7 @@
 Investigate the reported issue, implement a concrete fix when possible, and open a draft PR with evidence.
 Always produce a terminal report. Score is metadata, not a gate.
 If a PR is opened, screenshot proof is mandatory.
+PR proof must be from a running LiteLLM proxy end-to-end flow, not static/local mock HTML.
 
 ---
 
@@ -39,6 +40,7 @@ If the proxy fails to start, show the last 30 lines of `/tmp/proxy.log` and cont
 - Capture screenshots for every material claim.
 - Include at least one `before` screenshot showing the current behavior.
 - Keep all artifact names prefixed with `{{TASK_ID}}_`.
+- BEFORE screenshots must come from the running proxy flow (`http://localhost:<proxyPort>/...`), not `file://` pages or synthetic local HTML snapshots.
 
 ---
 
@@ -55,6 +57,7 @@ If the proxy fails to start, show the last 30 lines of `/tmp/proxy.log` and cont
 - Re-run the exact repro path after the patch.
 - Capture matching `after` screenshots (required for PRs).
 - Create a GIF if helpful to show before/after flow.
+- AFTER screenshots + GIF used for PR proof must come from the same running proxy flow.
 
 ---
 
@@ -67,6 +70,7 @@ When a code change is identifiable:
 3. Open a **draft** PR.
 4. Include evidence links and checklist in the PR body.
 5. Do not finalize/report success for the PR unless screenshot proof is attached.
+6. Do not use static/local mock HTML as primary PR proof.
 
 PR body should include:
 
@@ -132,6 +136,12 @@ If and only if no actionable code change is identifiable:
 - Call `write_report` with `no_action_reason` explaining why.
 - Include evidence proving why this is unactionable (question-only request, works-as-designed, missing required scope, etc.).
 
+If code changes are identifiable but live proxy E2E validation cannot be completed:
+
+- Do not claim PR proof is complete.
+- Either (a) block PR creation and return `no_action_reason`, or (b) keep PR draft clearly marked blocked and state missing E2E proof explicitly.
+- Never treat static/local mock HTML renders as equivalent to E2E evidence.
+
 ---
 
 ## Rules
@@ -139,6 +149,7 @@ If and only if no actionable code change is identifiable:
 - A missing GitHub issue URL is **not** a reason to skip PR creation.
 - "Feature request" wording is **not** a reason to skip PR creation when a concrete code change exists.
 - If `pr_url` is present, screenshots are mandatory: at least one `before` and one `after` (GIF optional).
+- If `pr_url` is present, proof must be E2E from a running proxy; static/local mock HTML proof is forbidden as primary validation.
 - Never open/report a PR without screenshot proof of the fix working.
 - Every claim needs screenshot or command evidence.
 - Always call `write_report` exactly once.

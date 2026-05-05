@@ -66,6 +66,29 @@ const SuccessCriterion = Type.Object({
   ),
 });
 
+const E2EProof = Type.Object({
+  proxy_base_url: Type.String({
+    description:
+      "Running proxy base URL used for E2E validation, e.g. http://localhost:4012",
+  }),
+  workflow_path: Type.String({
+    description:
+      "Relative path exercised on the running proxy during evidence capture, e.g. /sso/debug/callback",
+  }),
+  before_screenshot_paths: Type.Array(Type.String(), {
+    description:
+      "Absolute screenshot paths captured from the running proxy BEFORE the fix.",
+  }),
+  after_screenshot_paths: Type.Array(Type.String(), {
+    description:
+      "Absolute screenshot paths captured from the running proxy AFTER the fix.",
+  }),
+  gif_path: Type.String({
+    description:
+      "Absolute path to the BEFORE->AFTER GIF captured from the running proxy flow.",
+  }),
+});
+
 const WriteReportParams = Type.Object({
   verdict: VerdictEnum,
   difficulty: DifficultyEnum,
@@ -111,6 +134,13 @@ const WriteReportParams = Type.Object({
         "Only valid no-PR escape hatch. Explain why no actionable code change was possible.",
     })
   ),
+  e2e_validated: Type.Optional(
+    Type.Boolean({
+      description:
+        "True only if evidence came from a running LiteLLM proxy end-to-end flow (not static/local mock HTML).",
+    })
+  ),
+  e2e_evidence: Type.Optional(E2EProof),
   notes: Type.Optional(
     Type.String({
       description:
@@ -159,7 +189,8 @@ export function makeWriteReportTool(
     description:
       "MANDATORY FINAL TOOL. Call this exactly once at the end of the run with the structured " +
       "report. Pass the task_id returned by begin_repro_run so the report lands in the correct directory. " +
-      "Default policy: include pr_url. Use no_action_reason only when no actionable code change exists.",
+      "Default policy: include pr_url. Use no_action_reason only when no actionable code change exists. " +
+      "For PRs, E2E proof from a running proxy is mandatory.",
     parameters: WriteReportParams,
     execute: async (_id, payload) => {
       if (!payload.pr_url && !payload.no_action_reason) {
@@ -174,9 +205,35 @@ export function makeWriteReportTool(
         const afterCount = payload.screenshots.filter(
           (s) => s.kind === "after"
         ).length;
+        const gifCount = payload.screenshots.filter((s) => s.kind === "gif").length;
         if (beforeCount < 1 || afterCount < 1) {
           throw new Error(
             "write_report requires screenshot proof for PRs: at least one BEFORE and one AFTER screenshot when pr_url is provided."
+          );
+        }
+        if (gifCount < 1) {
+          throw new Error(
+            "write_report requires a BEFORE->AFTER GIF for PRs when pr_url is provided."
+          );
+        }
+        if (!payload.e2e_validated || !payload.e2e_evidence) {
+          throw new Error(
+            "write_report requires e2e_validated=true and e2e_evidence when pr_url is provided."
+          );
+        }
+        if (!/^http:\/\/localhost:\d+$/i.test(payload.e2e_evidence.proxy_base_url)) {
+          throw new Error(
+            "e2e_evidence.proxy_base_url must be a running localhost proxy URL (http://localhost:<port>)."
+          );
+        }
+        if (payload.e2e_evidence.before_screenshot_paths.length < 1) {
+          throw new Error(
+            "e2e_evidence.before_screenshot_paths must include at least one screenshot path."
+          );
+        }
+        if (payload.e2e_evidence.after_screenshot_paths.length < 1) {
+          throw new Error(
+            "e2e_evidence.after_screenshot_paths must include at least one screenshot path."
           );
         }
       }
@@ -287,6 +344,16 @@ export function renderReportMarkdown(p: ReportPayload): string {
   if (p.no_action_reason) {
     lines.push("### No action taken");
     lines.push(p.no_action_reason);
+    lines.push("");
+  }
+
+  if (p.e2e_evidence) {
+    lines.push("### E2E evidence");
+    lines.push(`- Proxy base URL: ${p.e2e_evidence.proxy_base_url}`);
+    lines.push(`- Workflow path: ${p.e2e_evidence.workflow_path}`);
+    lines.push(`- BEFORE captures: ${p.e2e_evidence.before_screenshot_paths.length}`);
+    lines.push(`- AFTER captures: ${p.e2e_evidence.after_screenshot_paths.length}`);
+    lines.push(`- GIF: ${p.e2e_evidence.gif_path}`);
     lines.push("");
   }
 

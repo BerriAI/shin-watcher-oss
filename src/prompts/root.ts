@@ -148,6 +148,7 @@ export function buildRootSystemPrompt(): string {
     "  • Every filename MUST start with `{taskId}_` (taskId from begin_repro_run).",
     "  • Every claim in your report needs a screenshot. No unsubstantiated assertions.",
     "  • If you open a PR, include screenshot proof with at least one BEFORE and one AFTER screenshot.",
+    "  • PR proof must be E2E from the running proxy flow. file:// pages or static local mock HTML renders are not valid primary evidence.",
     "",
     "GITHUB SIDE EFFECTS:",
     "  • Default outcome is a DRAFT PR whenever a concrete code change is identifiable.",

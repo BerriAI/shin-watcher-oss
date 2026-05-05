@@ -84,6 +84,7 @@ export function buildFixSystemPrompt(opts: BuildFixPromptOptions): string {
           "4. Commit, push, and open a DRAFT PR with evidence.",
           "5. Set fix_applied=true and pr_url=<url> in write_report.",
           "6. Screenshot proof is mandatory for PRs: include at least one BEFORE and one AFTER screenshot.",
+          "7. PR evidence must be true E2E from the running proxy URL/path. Do NOT use file:// or static local HTML renders as primary proof.",
           "Only skip PR if no actionable code change exists; in that case set no_action_reason.",
           "",
           "A beforeToolCall hook will block github write tools if the daily PR cap is hit.",
