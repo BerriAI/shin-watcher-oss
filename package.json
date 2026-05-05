@@ -11,6 +11,7 @@
     "dev": "tsx watch src/index.ts",
     "once": "tsx scripts/once.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test tests/**/*.test.ts",
     "format": "prettier --write \"src/**/*.ts\" \"scripts/**/*.ts\""
   },
   "engines": {
@@ -30,7 +31,8 @@
     "express": "^5.2.1",
     "node-cron": "^3.0.3",
     "self-improving-agent": "github:BerriAI/self-improving-agent",
-    "typebox": "^1.1.24"
+    "typebox": "^1.1.24",
+    "yaml": "^2.8.4"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",
