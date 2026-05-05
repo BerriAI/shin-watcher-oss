@@ -3,7 +3,7 @@ import path from "node:path";
 import { config } from "../config.js";
 import type { CandidateIssue } from "../picker.js";
 
-interface BuildReproPromptOptions {
+interface BuildFixPromptOptions {
   issue: CandidateIssue;
   workdir: string;
   screenshotDir: string;
@@ -37,17 +37,16 @@ Browser (Playwright MCP):
 GitHub (GitHub MCP):
   github_get_issue, github_list_issue_comments — read additional context
   github_search_code    — search the codebase without grepping locally
-  github_add_issue_comment — POST the final repro comment (always call this)
   github_fork_repository, github_create_branch, github_push_files,
-  github_create_or_update_file, github_create_pull_request — Phase 2 only
+  github_create_or_update_file, github_create_pull_request — open a DRAFT PR when code is changed
 `.trim();
 
-export function buildReproSystemPrompt(opts: BuildReproPromptOptions): string {
-  const planReproSkill = readSkill("plan_repro.md");
+export function buildFixSystemPrompt(opts: BuildFixPromptOptions): string {
+  const planFixSkill = readSkill("plan_fix.md");
   const implementSkill = opts.fixEnabled ? readSkill("implement.md") : null;
 
   return [
-    "You are shin-watcher, an autonomous bug-reproduction agent for BerriAI/litellm.",
+    "You are shin-watcher, an autonomous issue-fixing agent for BerriAI/litellm.",
     "You run unattended. Do not ask the user anything — if something is unclear, state your assumption in `notes` and proceed.",
     "",
     "ENVIRONMENT:",
@@ -64,48 +63,35 @@ export function buildReproSystemPrompt(opts: BuildReproPromptOptions): string {
     "The dashboard streams your normal assistant text to the user while you work.",
     "Your first assistant response MUST be visible plain English before any tool call.",
     "In that first response, briefly share:",
-    "  - your understanding of the reported bug from the issue text,",
-    "  - the exact behavior you need to prove or disprove,",
-    "  - the initial repro strategy you will try first.",
+    "  - your understanding of the reported issue from the issue text,",
+    "  - the behavior you need to verify and fix,",
+    "  - the initial fix strategy you will try first.",
     "Keep this first update short: 3-6 bullets or sentences. It is a public status note, not private chain-of-thought.",
     "Before major tool calls and after important observations, emit a short visible progress update in plain English.",
-    "These updates should be 1-3 concise sentences and should explain:",
-    "  - what you are trying to learn or prove now,",
-    "  - the current hypothesis or decision point,",
-    "  - what you just learned from the last tool result, if anything.",
-    "Do not expose private chain-of-thought. Share concise rationale, evidence, and next steps.",
-    "Examples:",
-    "  - “I’m checking the Responses transformation path first because the issue mentions `api_base=None` during LangChain agent setup.”",
-    "  - “The grep result points to request sanitization, so next I’m reading that helper and building a minimal curl repro.”",
-    "  - “The proxy reproduced a 500 with `api_base=None`; now I’m capturing the failing request and screenshot evidence.”",
     "",
     TOOL_INVENTORY,
     "",
     "─── SKILL ───────────────────────────────────────────────────────────────────",
-    planReproSkill.replaceAll("{{TASK_ID}}", opts.taskId).replaceAll("{{ISSUE}}", `#${opts.issue.number}`),
+    planFixSkill.replaceAll("{{TASK_ID}}", opts.taskId).replaceAll("{{ISSUE}}", `#${opts.issue.number}`),
     "",
     opts.fixEnabled
       ? [
-          "─── PHASE 2: FIX (only if score ≥ 3 AND difficulty is easy or medium) ────────",
-          "After posting the repro comment, attempt the fix inline:",
+          "─── FIX POLICY ─────────────────────────────────────────────────────────────",
+          "Default outcome: open a DRAFT PR whenever a concrete code change is identifiable.",
           "1. Apply the patch in the working tree (use shell to edit files).",
-          "2. Restart the proxy, re-run the exact repro flow, take AFTER_* screenshots.",
-          "3. Use stitch_gif to build a demo GIF (BEFORE → fix → AFTER).",
-          "4. If every QA checklist item passes:",
-          "     a. git checkout -B shin-watcher/issue-<NUMBER>  &&  git add -A && git commit",
-          "     b. git push shin-bot <branch>",
-          "     c. github_create_pull_request (DRAFT, title prefixed [shin-watcher][auto-repro],",
-          "        description must include the GIF and the QA checklist with ✅ next to each item)",
+          "2. Restart the proxy, re-run the exact flow, take AFTER_* screenshots.",
+          "3. Use stitch_gif to build a demo GIF (BEFORE -> fix -> AFTER).",
+          "4. Commit, push, and open a DRAFT PR with evidence.",
           "5. Set fix_applied=true and pr_url=<url> in write_report.",
-          "If difficulty is hard, or validation fails: set fix_applied=false and explain in notes. Do NOT push.",
+          "Only skip PR if no actionable code change exists; in that case set no_action_reason.",
           "",
           "A beforeToolCall hook will block github write tools if the daily PR cap is hit.",
-          "If blocked, stop the GitHub side and call write_report with what you have.",
+          "If blocked, stop the GitHub side and call write_report with blockers.",
         ].join("\n")
       : [
-          "Phase 2 (fix / push / PR) is DISABLED for this run.",
-          "Do NOT modify source files or call any github write tools.",
-          "Post the repro comment, then call write_report.",
+          "AUTO_FIX is disabled for this run.",
+          "Do NOT call github write tools.",
+          "Investigate, produce evidence, and call write_report with a concrete fix plan.",
         ].join("\n"),
     "",
     "ALWAYS end by calling `write_report` exactly once.",
@@ -117,7 +103,7 @@ export function buildReproSystemPrompt(opts: BuildReproPromptOptions): string {
     .join("\n");
 }
 
-export function buildReproUserPrompt(issue: CandidateIssue): string {
+export function buildFixUserPrompt(issue: CandidateIssue): string {
   const comments = issue.recentComments.length
     ? issue.recentComments
         .map(
@@ -136,7 +122,7 @@ export function buildReproUserPrompt(issue: CandidateIssue): string {
     "── Recent comments ─────────────────────────────────────────────",
     comments,
     "",
-    "Begin now. First, send a visible public note summarizing your understanding of this issue and your initial repro plan. Do not call tools before that note.",
+    "Begin now. First, send a visible public note summarizing your understanding of this issue and your initial fix plan. Do not call tools before that note.",
   ].join("\n");
 }
 
@@ -150,5 +136,5 @@ function readSkill(filename: string): string {
 
 function truncate(s: string, max: number): string {
   if (s.length <= max) return s;
-  return s.slice(0, max) + `\n… [${s.length - max} chars truncated]`;
+  return s.slice(0, max) + `\n... [${s.length - max} chars truncated]`;
 }

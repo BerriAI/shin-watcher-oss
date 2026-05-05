@@ -90,8 +90,8 @@ const WriteReportParams = Type.Object({
   }),
   screenshots: Type.Array(ScreenshotRef, {
     description:
-      "Every screenshot/GIF the report should embed. Phase 1 must include at least one 'before'. " +
-      "Phase 2 must include matching 'after' screenshots and a 'gif'.",
+      "Every screenshot/GIF the report should embed. Include at least one 'before'. " +
+      "For code changes, include matching 'after' proof and a GIF when possible.",
   }),
   fix_applied: Type.Optional(
     Type.Boolean({
@@ -100,7 +100,16 @@ const WriteReportParams = Type.Object({
     })
   ),
   pr_url: Type.Optional(
-    Type.String({ description: "Draft PR URL if Phase 2 opened one." })
+    Type.String({
+      description:
+        "Draft PR URL. Required by default when a concrete code change was identified.",
+    })
+  ),
+  no_action_reason: Type.Optional(
+    Type.String({
+      description:
+        "Only valid no-PR escape hatch. Explain why no actionable code change was possible.",
+    })
   ),
   notes: Type.Optional(
     Type.String({
@@ -150,9 +159,14 @@ export function makeWriteReportTool(
     description:
       "MANDATORY FINAL TOOL. Call this exactly once at the end of the run with the structured " +
       "report. Pass the task_id returned by begin_repro_run so the report lands in the correct directory. " +
-      "The verdict (0-5) goes at the very top of the rendered markdown.",
+      "Default policy: include pr_url. Use no_action_reason only when no actionable code change exists.",
     parameters: WriteReportParams,
     execute: async (_id, payload) => {
+      if (!payload.pr_url && !payload.no_action_reason) {
+        throw new Error(
+          "write_report requires pr_url unless no_action_reason is explicitly provided."
+        );
+      }
       const resolvedPath = payload.task_id
         ? path.join(config.paths.runs, payload.task_id, "report.md")
         : opts.reportPath;
@@ -254,6 +268,12 @@ export function renderReportMarkdown(p: ReportPayload): string {
   if (p.pr_url) {
     lines.push(`### Draft PR`);
     lines.push(p.pr_url);
+    lines.push("");
+  }
+
+  if (p.no_action_reason) {
+    lines.push("### No action taken");
+    lines.push(p.no_action_reason);
     lines.push("");
   }
 

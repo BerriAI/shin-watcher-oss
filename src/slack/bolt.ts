@@ -238,10 +238,11 @@ export async function startSlackBolt(): Promise<void> {
           if (beforeShot) {
             await args.uploadFile(beforeShot.path, beforeShot.caption, args.kind === "direct" ? undefined : threadTs);
           }
-          // One-shot requirement: final output must include a PR URL.
-          if (!reportPayload.pr_url) {
+          // One-shot requirement: PR by default, with a single escape hatch for
+          // truly unactionable requests.
+          if (!reportPayload.pr_url && !reportPayload.no_action_reason) {
             await updateWithHeader(
-              "❌ One-shot mode requires a draft PR URL. This run ended without `pr_url`; marking as failed."
+              "❌ One-shot mode requires a draft PR URL unless `no_action_reason` is explicitly set for a truly unactionable request. Marking as failed."
             );
             state.markSlackTaskFailed(taskId, "missing pr_url in final report");
             return;
@@ -658,6 +659,9 @@ function injectSlackContext(message: string, kind: "direct" | "channel"): string
     `Treat this as a strict repro+fix task. Do not stop at planning text.`,
     `Goal: file a draft PR and include screenshot evidence.`,
     `Hard requirements: return pr_url in write_report; include screenshot proof (before + after, or blocked proof with clear reason).`,
+    `A pasted feature request or missing GitHub issue URL is NEVER a valid reason to skip PR creation.`,
+    `If you can identify a concrete file:line code change, open a draft PR.`,
+    `Only skip PR when truly unactionable (pure question / works-as-designed with no code change); then set no_action_reason in write_report.`,
     `If full validation is blocked, still open a draft PR and report blockers explicitly.]`,
     `[MODE=SLACK_ONE_SHOT_PR]`,
     ``,
@@ -735,6 +739,11 @@ function buildScoreCard(p: ReportPayload, gistUrl: string | null): string {
   if (p.pr_url) {
     lines.push("");
     lines.push(`🔀 *Draft PR:* ${p.pr_url}`);
+  }
+
+  if (p.no_action_reason) {
+    lines.push("");
+    lines.push(`⚪ *No code change actioned:* ${p.no_action_reason}`);
   }
 
   if (gistUrl) {

@@ -12,9 +12,9 @@ import {
 } from "./proxy.js";
 import { createAgent, type AgentBundle } from "./agent.js";
 import {
-  buildReproSystemPrompt,
-  buildReproUserPrompt,
-} from "./prompts/repro.js";
+  buildFixSystemPrompt,
+  buildFixUserPrompt,
+} from "./prompts/fix.js";
 import { ensureBotRemote, ensureFork } from "./github.js";
 import { summarizeRun, type RunSummary } from "./report.js";
 import type { ReportPayload } from "./tools/writeReport.js";
@@ -145,7 +145,7 @@ export class Runner {
 
       LiveBus.setupRun(taskId, issue, opts?.chatSessionId, "Creating repro agent");
       // 4. Build and prompt the agent.
-      const systemPrompt = buildReproSystemPrompt({
+      const systemPrompt = buildFixSystemPrompt({
         issue,
         workdir,
         screenshotDir,
@@ -172,7 +172,7 @@ export class Runner {
       LiveBus.startRun(taskId, issue, bundle.agent, opts?.chatSessionId);
       bundle.agent.subscribe((event) => LiveBus.pushEvent(taskId, event));
 
-      const userPrompt = buildReproUserPrompt(issue);
+      const userPrompt = buildFixUserPrompt(issue);
       const promptDone = bundle.agent.prompt(userPrompt);
 
       // Race: write_report sets terminate:true and resolves reportPromise.

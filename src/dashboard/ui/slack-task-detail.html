@@ -292,7 +292,7 @@ async function load() {
       </div>
 
       <div class="timeline" id="timeline">
-        ${events.length === 0 ? '<div class="empty">No transcript events found in this task\\'s time window.</div>' : events.map(renderEvent).join('')}
+        ${events.length === 0 ? '<div class="empty">No transcript events found in this task window.</div>' : events.map(renderEvent).join('')}
       </div>
     `;
     document.getElementById('content').innerHTML = html;

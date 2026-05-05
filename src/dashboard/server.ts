@@ -45,9 +45,9 @@ async function runBatch(batchSize: number): Promise<void> {
   for (const issue of issues) {
     const sessionId = `batch-${issue.number}-${Date.now()}`;
     const msg =
-      `Reproduce issue #${issue.number} on ` +
+      `Fix issue #${issue.number} on ` +
       `${config.github.targetOwner}/${config.github.targetRepo} ` +
-      `and post your findings as a comment on the issue.`;
+      `and open a draft PR with screenshot evidence.`;
 
     console.log(`[scheduler] queuing #${issue.number}: ${issue.title}`);
 
@@ -197,9 +197,9 @@ export function startDashboard(port = 3333): void {
     }
     const sessionId = `manual-${issueNumber}-${Date.now()}`;
     const msg =
-      `Reproduce issue #${issueNumber} on ` +
+      `Fix issue #${issueNumber} on ` +
       `${config.github.targetOwner}/${config.github.targetRepo} ` +
-      `and post your findings as a comment on the issue.`;
+      `and open a draft PR with screenshot evidence.`;
 
     // Immediately register in LiveBus so it shows in Active Now while the agent boots.
     try {
@@ -377,7 +377,7 @@ export function startDashboard(port = 3333): void {
     const last = msgs[msgs.length - 1];
     if (last?.role !== "user") return res.status(400).json({ error: "last message must be user" });
 
-    const userMessage = last.content;
+    const userMessage = injectDashboardFixContext(last.content);
 
     // Always stream — the session agent produces real-time events.
     res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
@@ -484,8 +484,8 @@ export function startDashboard(port = 3333): void {
         const session = SessionManager.getOrCreate(sessionId);
         const agent = await awaitSessionAgent(session);
         const msg = steerMessage
-          ? `${raw}\n\nAdditional context: ${steerMessage}`
-          : raw || "Pick the next eligible open bug and reproduce it.";
+          ? injectDashboardFixContext(`${raw}\n\nAdditional context: ${steerMessage}`)
+          : injectDashboardFixContext(raw || "Pick the next eligible open bug and open a draft PR with proof.");
         await (agent as unknown as { prompt: (m: string) => Promise<void> }).prompt(msg);
       } catch (e) {
         console.error("[dashboard] invoke error:", e);
@@ -770,6 +770,19 @@ function escapeHtml(s: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+function injectDashboardFixContext(message: string): string {
+  return [
+    "[Context: dashboard fix-first mode.]",
+    "Treat actionable issue descriptions as strict fix tasks.",
+    "Default outcome: open a draft PR with screenshot proof whenever a concrete code change is identifiable.",
+    "Missing GitHub issue URL or 'feature request' wording is not a reason to skip PR creation.",
+    "Only skip PR when truly unactionable (pure question / works-as-designed without code change), then set no_action_reason in write_report.",
+    "[MODE=DASHBOARD_FIX_FIRST]",
+    "",
+    message,
+  ].join("\n");
 }
 
 /**
