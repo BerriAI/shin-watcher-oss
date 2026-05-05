@@ -1,6 +1,31 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+
+export interface ProxyCredentials {
+  masterKey: string;
+  uiUsername: string;
+  uiPassword: string;
+}
+
+/**
+ * Generate ephemeral admin credentials for a per-run sandbox LiteLLM proxy.
+ * These don't need to be stable — each repro run boots its own isolated proxy
+ * on a unique port, so creds are scoped to that single run.
+ */
+export function generateProxyCredentials(): ProxyCredentials {
+  return {
+    masterKey: `sk-${crypto.randomBytes(24).toString("hex")}`,
+    uiUsername: "admin",
+    uiPassword: crypto.randomBytes(24).toString("hex"),
+  };
+}
+
+/** Default starting port for per-run sandbox proxies. Bumped from 4000 to
+ * avoid collision with the LiteLLM proxy that handles shin-watcher's own
+ * LLM calls (LITELLM_BASE_URL). */
+export const SANDBOX_PROXY_PORT_START = 5001;
 
 export interface ProxyHandle {
   pid: number;

@@ -48,6 +48,15 @@ export interface RootSession {
    * Set by begin_repro_run, cleared by write_report.
    */
   currentTaskId: string | null;
+  /**
+   * Stable Langfuse session identifier for THIS chat — derived from the
+   * "This is issue #XXX" / "This is a pasted issue: ..." declaration the
+   * agent emits on Turn 1 (per BerriAI/shin-watcher-oss#2). Null until
+   * the first Turn 1 reply has been parsed. Once set, every subsequent
+   * trace from this chat is tagged with the same sessionId so the whole
+   * conversation lands in one Langfuse session.
+   */
+  issueId: string | null;
   lastActivityAt: number;
   dispose: () => Promise<void>;
 }
@@ -293,6 +302,7 @@ class SessionManagerImpl {
       // Will be replaced once the agent resolves; server must await getAgent().
       agent: null as unknown as Agent,
       currentTaskId: null,
+      issueId: null,
       lastActivityAt: Date.now(),
       dispose: async () => {
         try {

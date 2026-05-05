@@ -10,7 +10,10 @@ interface BuildReproPromptOptions {
   reportPath: string;
   taskId: string;
   fixEnabled: boolean;
-  proxyPort?: number;
+  proxyPort: number;
+  proxyMasterKey: string;
+  proxyUiUsername: string;
+  proxyUiPassword: string;
 }
 
 const TOOL_INVENTORY = `

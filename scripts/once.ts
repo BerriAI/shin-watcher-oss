@@ -9,6 +9,10 @@
  * The server stays alive after the run so you can invoke more via the chat.
  * Ctrl-C to quit.
  */
+// MUST be the very first import — initialises Langfuse/OpenTelemetry
+// before anything else can reach LLM-using code.
+import "../src/observability/instrumentation.js";
+
 import { startDashboard } from "../src/dashboard/server.js";
 import { SessionManager, awaitSessionAgent } from "../src/dashboard/session.js";
 

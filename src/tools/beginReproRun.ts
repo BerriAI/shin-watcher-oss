@@ -5,8 +5,9 @@ import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { config } from "../config.js";
 import { LiveBus } from "../dashboard/live.js";
 import type { CandidateIssue } from "../picker.js";
+import { generateProxyCredentials, SANDBOX_PROXY_PORT_START } from "../proxy.js";
 
-let portCounter = config.proxy.port;
+let portCounter = SANDBOX_PROXY_PORT_START;
 
 const BeginReproParams = Type.Object({
   issue_number: Type.Optional(
@@ -69,6 +70,7 @@ export function makeBeginReproRunTool(opts: {
       const screenshotDir = path.join(runDir, "screenshots");
       const workdir = path.join(config.paths.workdir, taskId, "litellm");
       const proxyPort = portCounter++;
+      const proxyCreds = generateProxyCredentials();
 
       fs.mkdirSync(runDir, { recursive: true });
       fs.mkdirSync(screenshotDir, { recursive: true });
@@ -108,10 +110,10 @@ export function makeBeginReproRunTool(opts: {
                 screenshotDir,
                 reportPath: path.join(runDir, "report.md"),
                 proxyPort,
-                proxyMasterKey: config.proxy.masterKey,
-                proxyUiUsername: config.proxy.uiUsername,
-                proxyUiPassword: config.proxy.uiPassword,
-                sandboxDbUrl: config.proxy.sandboxDbUrl || null,
+                proxyMasterKey: proxyCreds.masterKey,
+                proxyUiUsername: proxyCreds.uiUsername,
+                proxyUiPassword: proxyCreds.uiPassword,
+                sandboxDbUrl: process.env["LITELLM_SANDBOX_DB_URL"] || null,
                 cloneUrl: `https://github.com/${config.github.targetOwner}/${config.github.targetRepo}.git`,
               },
               null,
