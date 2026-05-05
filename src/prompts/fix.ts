@@ -83,6 +83,7 @@ export function buildFixSystemPrompt(opts: BuildFixPromptOptions): string {
           "3. Use stitch_gif to build a demo GIF (BEFORE -> fix -> AFTER).",
           "4. Commit, push, and open a DRAFT PR with evidence.",
           "5. Set fix_applied=true and pr_url=<url> in write_report.",
+          "6. Screenshot proof is mandatory for PRs: include at least one BEFORE and one AFTER screenshot.",
           "Only skip PR if no actionable code change exists; in that case set no_action_reason.",
           "",
           "A beforeToolCall hook will block github write tools if the daily PR cap is hit.",

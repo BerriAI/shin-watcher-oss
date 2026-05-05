@@ -3,6 +3,7 @@
 ## Goal
 Investigate the reported issue, implement a concrete fix when possible, and open a draft PR with evidence.
 Always produce a terminal report. Score is metadata, not a gate.
+If a PR is opened, screenshot proof is mandatory.
 
 ---
 
@@ -52,7 +53,7 @@ If the proxy fails to start, show the last 30 lines of `/tmp/proxy.log` and cont
 ## Step 4 — Validate and capture AFTER evidence
 
 - Re-run the exact repro path after the patch.
-- Capture matching `after` screenshots.
+- Capture matching `after` screenshots (required for PRs).
 - Create a GIF if helpful to show before/after flow.
 
 ---
@@ -65,6 +66,7 @@ When a code change is identifiable:
 2. Push to the bot fork.
 3. Open a **draft** PR.
 4. Include evidence links and checklist in the PR body.
+5. Do not finalize/report success for the PR unless screenshot proof is attached.
 
 PR body should include:
 
@@ -79,6 +81,7 @@ PR body should include:
 ---
 
 ### Reproduction evidence
+**Required:** at least one BEFORE and one AFTER screenshot for every PR.
 ![caption](screenshot_url)
 
 ### Root cause
@@ -135,5 +138,7 @@ If and only if no actionable code change is identifiable:
 
 - A missing GitHub issue URL is **not** a reason to skip PR creation.
 - "Feature request" wording is **not** a reason to skip PR creation when a concrete code change exists.
+- If `pr_url` is present, screenshots are mandatory: at least one `before` and one `after` (GIF optional).
+- Never open/report a PR without screenshot proof of the fix working.
 - Every claim needs screenshot or command evidence.
 - Always call `write_report` exactly once.

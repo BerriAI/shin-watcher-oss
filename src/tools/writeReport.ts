@@ -167,6 +167,19 @@ export function makeWriteReportTool(
           "write_report requires pr_url unless no_action_reason is explicitly provided."
         );
       }
+      if (payload.pr_url) {
+        const beforeCount = payload.screenshots.filter(
+          (s) => s.kind === "before"
+        ).length;
+        const afterCount = payload.screenshots.filter(
+          (s) => s.kind === "after"
+        ).length;
+        if (beforeCount < 1 || afterCount < 1) {
+          throw new Error(
+            "write_report requires screenshot proof for PRs: at least one BEFORE and one AFTER screenshot when pr_url is provided."
+          );
+        }
+      }
       const resolvedPath = payload.task_id
         ? path.join(config.paths.runs, payload.task_id, "report.md")
         : opts.reportPath;
