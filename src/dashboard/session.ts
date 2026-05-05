@@ -22,6 +22,7 @@ import { githubMcpServer, playwrightMcpServer } from "../mcp/servers.js";
 import { buildRootSystemPrompt } from "../prompts/root.js";
 import { LiveBus } from "./live.js";
 import { State } from "../state.js";
+import { feedbackTools } from "self-improving-agent/pi";
 
 /** How long (ms) a session can be idle before auto-disposal. */
 const SESSION_TTL_MS = 30 * 60 * 1_000; // 30 min
@@ -188,7 +189,16 @@ class SessionManagerImpl {
         }) as AgentTool,
       ];
 
-      const tools = [...nativeTools, ...browserTools, ...githubTools];
+      // self-improving-agent: lets the root agent propose diffs to its own
+      // prompts/tools when the user gives feedback in chat, then open a draft
+      // PR after explicit approval. SELF_IMPROVING_AGENT_REPO_ROOT must point
+      // at this repo (see .env.example).
+      const tools = [
+        ...nativeTools,
+        ...browserTools,
+        ...githubTools,
+        ...feedbackTools,
+      ];
 
       const canOpenAnotherPrToday = () =>
         this.state.countFixPrsToday() < config.flags.maxFixPrsPerDay;
