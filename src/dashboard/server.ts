@@ -99,6 +99,22 @@ export function startDashboard(port = 3333): void {
     res.redirect("/login");
   });
 
+  // Magic-link auth: ?key=<DASHBOARD_MASTER_KEY> mints a session cookie and
+  // redirects to the same path without the key. Lets us bookmark URLs like
+  // /slack-tasks/23?key=... and never get bounced to /login again.
+  app.use((req, res, next) => {
+    const queryKey =
+      typeof req.query.key === "string" ? (req.query.key as string) : undefined;
+    if (queryKey && secureEqual(queryKey, config.dashboard.masterKey)) {
+      res.setHeader("Set-Cookie", serializeSessionCookie(makeSessionCookie()));
+      const url = new URL(req.originalUrl, "http://localhost");
+      url.searchParams.delete("key");
+      const target = url.pathname + (url.search ? url.search : "");
+      return res.redirect(target);
+    }
+    next();
+  });
+
   const boltEnabled = config.slack.useBolt;
   // Bolt-only mode: no HTTP Slack ingestion route.
   if (!boltEnabled) {
@@ -794,16 +810,11 @@ function readTaskEvents(task: SlackTask): NormalizedEvent[] {
     : Date.now();
   const MAX_EVENTS = 500;
 
-  // Stream-read the file line by line. Newest sessions append to the
-  // end so we read the whole thing — typical sizes are well under a
-  // few MB; we cap output rather than input.
-  let raw: string;
-  try {
-    raw = fs.readFileSync(transcriptPath, "utf-8");
-  } catch {
-    return [];
-  }
-  const lines = raw.split("\n");
+  // Read only the tail of the transcript. Shared Slack session transcripts
+  // can grow very large; reading the full file blocks the request and makes
+  // the task detail page appear empty/stuck.
+  const MAX_READ_BYTES = 2_000_000; // 2MB tail window
+  const lines = readTranscriptTailLines(transcriptPath, MAX_READ_BYTES);
   const events: NormalizedEvent[] = [];
   for (const line of lines) {
     if (!line) continue;
@@ -861,5 +872,40 @@ function readTaskEvents(task: SlackTask): NormalizedEvent[] {
       });
     }
   }
+  if (events.length === 0) {
+    // Keep UI informative even when no transcript chunk landed in the window.
+    events.push({
+      ts: Date.now(),
+      kind: "assistant_message",
+      text:
+        task.status === "running"
+          ? "No transcript events found in current window yet. Task is still running."
+          : "No transcript events found for this task window.",
+    });
+  }
   return events;
+}
+
+function readTranscriptTailLines(filePath: string, maxBytes: number): string[] {
+  let fd: number | null = null;
+  try {
+    const stat = fs.statSync(filePath);
+    const size = stat.size;
+    const start = Math.max(0, size - maxBytes);
+    const length = size - start;
+    const buffer = Buffer.alloc(length);
+    fd = fs.openSync(filePath, "r");
+    fs.readSync(fd, buffer, 0, length, start);
+    return buffer.toString("utf-8").split("\n");
+  } catch {
+    return [];
+  } finally {
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
 }

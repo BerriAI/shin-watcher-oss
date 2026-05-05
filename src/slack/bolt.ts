@@ -162,9 +162,8 @@ export async function startSlackBolt(): Promise<void> {
       if (finished) return;
       if (Date.now() - lastActivityAt < 30_000) return;
       lastActivityAt = Date.now();
-      const heartbeatText = accumulated.trim()
-        ? truncateSlackText(accumulated.trim()) + "\n\n_... still working, gathering evidence ..._"
-        : "_Still working on this. Running checks and gathering evidence..._";
+      const heartbeatText =
+        "_Working on this now (one-shot mode). I will post only the final PR result in this thread._";
       console.log(`[slack:post] heartbeat update ts=${placeholderTs}`);
       void updateWithHeader(heartbeatText);
     }, 15_000);
@@ -204,27 +203,28 @@ export async function startSlackBolt(): Promise<void> {
       onDelta: async (delta) => {
         accumulated += delta;
         lastActivityAt = Date.now();
-        // Edit the placeholder in place every 10s so the user sees live progress
+        // One-shot PR mode: suppress planning/progress deltas from user-visible thread.
+        // Keep only periodic heartbeat and final PR card.
         const now = Date.now();
         if (accumulated.trim() && now - lastUpdateAt > 10_000) {
           lastUpdateAt = now;
           // Bump the DB row's updated_at so the global poller can tell
           // this task is making real progress vs. genuinely stalled.
           state.bumpSlackTaskActivity(taskId);
-          console.log(`[slack:agent] delta update chars=${accumulated.length} ts=${placeholderTs}`);
-          await updateWithHeader(
-            truncateSlackText(accumulated.trim()) + "\n\n_... thinking ..._"
+          console.log(
+            `[slack:agent] delta buffered chars=${accumulated.length} ts=${placeholderTs}`
           );
         }
       },
       onReproStart: async (replySoFar) => {
         lastActivityAt = Date.now();
         state.bumpSlackTaskActivity(taskId);
-        const reproText =
-          truncateSlackText(replySoFar.trim()) ||
-          "Starting the repro run now. You can also watch it in the runs dashboard.";
-        console.log(`[slack:agent] repro_start chars=${replySoFar.length} ts=${placeholderTs}`);
-        await updateWithHeader(reproText + "\n\n_... repro run started ..._");
+        console.log(
+          `[slack:agent] repro_start chars=${replySoFar.length} ts=${placeholderTs}`
+        );
+        await updateWithHeader(
+          "_Repro started (one-shot mode). I will post the final PR URL + proof once complete._"
+        );
       },
       onDone: async (reply) => {
         finished = true;
@@ -238,10 +238,22 @@ export async function startSlackBolt(): Promise<void> {
           if (beforeShot) {
             await args.uploadFile(beforeShot.path, beforeShot.caption, args.kind === "direct" ? undefined : threadTs);
           }
+          // One-shot requirement: final output must include a PR URL.
+          if (!reportPayload.pr_url) {
+            await updateWithHeader(
+              "❌ One-shot mode requires a draft PR URL. This run ended without `pr_url`; marking as failed."
+            );
+            state.markSlackTaskFailed(taskId, "missing pr_url in final report");
+            return;
+          }
           // Update placeholder with structured score card
           await updateWithHeader(buildScoreCard(reportPayload, gistUrl));
         } else {
-          await updateWithHeader(truncateSlackText(reply));
+          await updateWithHeader(
+            "❌ One-shot mode requires a structured report with PR URL. Marking this run as failed."
+          );
+          state.markSlackTaskFailed(taskId, "missing report payload");
+          return;
         }
         state.markSlackTaskDone(taskId);
       },
@@ -334,20 +346,16 @@ export async function startSlackBolt(): Promise<void> {
     let kind: "direct" | "channel" | null = null;
     let message = "";
 
+    // IMPORTANT: channel mentions are handled by app_mention. Keep message-event
+    // processing DM-only to avoid duplicate runs on the same user message.
     if (ev.channel_type === "im") {
       kind = "direct";
       message = text.trim();
-    } else if (["channel", "group", "mpim"].includes(ev.channel_type ?? "") && isSlackBotMention(text)) {
-      kind = "channel";
-      message = cleanSlackMentionText(text);
     }
     if (!kind || !message) return;
     if (isDuplicate(eventId, ev.channel, ev.ts)) return;
     await addAckReaction(client, ev.channel, ev.ts);
-    const enriched =
-      kind === "channel"
-        ? await enrichMessageFromThread(client, ev, message)
-        : message;
+    const enriched = message;
 
     await runFromEvent({
       source: "message",
@@ -646,11 +654,12 @@ function isSlackBotMention(text: string): boolean {
 
 function injectSlackContext(message: string, kind: "direct" | "channel"): string {
   return [
-    `[Context: triggered from Slack ${kind === "direct" ? "DM" : "channel"}.`,
-    `When you finish a repro run, call write_report as normal — the results will be posted back`,
-    `to this Slack thread as a score card (verdict/5, root cause, fix plan) plus a GitHub Gist`,
-    `for the full report. Keep your in-thread text concise (Slack truncates at ~3500 chars).`,
-    `Do NOT post a GitHub comment unless the issue came in with a real GitHub issue URL/number.]`,
+    `[Context: triggered from Slack ${kind === "direct" ? "DM" : "channel"} in one-shot PR mode.`,
+    `Treat this as a strict repro+fix task. Do not stop at planning text.`,
+    `Goal: file a draft PR and include screenshot evidence.`,
+    `Hard requirements: return pr_url in write_report; include screenshot proof (before + after, or blocked proof with clear reason).`,
+    `If full validation is blocked, still open a draft PR and report blockers explicitly.]`,
+    `[MODE=SLACK_ONE_SHOT_PR]`,
     ``,
     message,
   ].join("\n");
