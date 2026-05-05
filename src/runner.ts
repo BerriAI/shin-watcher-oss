@@ -3,7 +3,13 @@ import path from "node:path";
 import { config } from "./config.js";
 import { State } from "./state.js";
 import { Picker, type CandidateIssue } from "./picker.js";
-import { prepareWorkdir, startProxy, type ProxyHandle } from "./proxy.js";
+import {
+  generateProxyCredentials,
+  prepareWorkdir,
+  SANDBOX_PROXY_PORT_START,
+  startProxy,
+  type ProxyHandle,
+} from "./proxy.js";
 import { createAgent, type AgentBundle } from "./agent.js";
 import {
   buildReproSystemPrompt,
@@ -30,7 +36,7 @@ import { LiveBus } from "./dashboard/live.js";
  * proxy is healthy) so the agent can do its job autonomously.
  */
 // Each concurrent run gets its own proxy port so they don't conflict.
-let nextPort = config.proxy.port;
+let nextPort = SANDBOX_PROXY_PORT_START;
 function allocatePort(): number { return nextPort++; }
 
 export class Runner {
@@ -115,15 +121,17 @@ export class Runner {
       }
 
       LiveBus.setupRun(taskId, issue, opts?.chatSessionId, "Starting local LiteLLM proxy");
-      // 3. Start the local litellm proxy on an allocated port (unique per run).
+      // 3. Start the local litellm proxy on an allocated port (unique per run)
+      //    with ephemeral admin credentials scoped to this run only.
       const proxyPort = allocatePort();
+      const proxyCreds = generateProxyCredentials();
       proxy = await startProxy({
         workdir,
         port: proxyPort,
-        masterKey: config.proxy.masterKey,
-        uiUsername: config.proxy.uiUsername,
-        uiPassword: config.proxy.uiPassword,
-        databaseUrl: config.proxy.sandboxDbUrl || undefined,
+        masterKey: proxyCreds.masterKey,
+        uiUsername: proxyCreds.uiUsername,
+        uiPassword: proxyCreds.uiPassword,
+        databaseUrl: process.env["LITELLM_SANDBOX_DB_URL"] || undefined,
         logPath: proxyLogPath,
         onRetry: (attempt, maxAttempts, shortError) => {
           LiveBus.setupRun(
@@ -145,6 +153,9 @@ export class Runner {
         taskId,
         fixEnabled,
         proxyPort,
+        proxyMasterKey: proxyCreds.masterKey,
+        proxyUiUsername: proxyCreds.uiUsername,
+        proxyUiPassword: proxyCreds.uiPassword,
       });
       bundle = await createAgent({
         rootDir: workdir,

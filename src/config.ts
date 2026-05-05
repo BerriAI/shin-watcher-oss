@@ -75,13 +75,6 @@ export const config = {
     autoFix: bool("AUTO_FIX", false),
     maxFixPrsPerDay: int("MAX_FIX_PRS_PER_DAY", 5),
   },
-  proxy: {
-    masterKey: required("PROXY_MASTER_KEY"),
-    uiUsername: optional("PROXY_UI_USERNAME", "admin"),
-    uiPassword: required("PROXY_UI_PASSWORD"),
-    sandboxDbUrl: optional("LITELLM_SANDBOX_DB_URL", ""),
-    port: int("PROXY_PORT", 4000),
-  },
   paths: {
     workdir: path.resolve(repoRoot, optional("WORKDIR", "./workdir")),
     runs: path.resolve(repoRoot, optional("RUNS_DIR", "./runs")),
