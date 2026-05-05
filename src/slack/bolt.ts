@@ -1,6 +1,8 @@
 import { App } from "@slack/bolt";
+import fs from "node:fs";
 import { config } from "../config.js";
 import { runRootChat } from "../chat/rootChat.js";
+import { type ReportPayload, renderReportMarkdown } from "../tools/writeReport.js";
 
 type SlackEventCommon = {
   text?: string;
@@ -42,6 +44,7 @@ export async function startSlackBolt(): Promise<void> {
     kind: "direct" | "channel";
     post: (text: string, threadTs?: string) => Promise<{ ts: string }>;
     update: (ts: string, text: string, threadTs?: string) => Promise<void>;
+    uploadFile: (filePath: string, caption: string, threadTs?: string) => Promise<void>;
   }): Promise<void> => {
     const event = args.event;
     const teamId = "socket";
@@ -67,6 +70,10 @@ export async function startSlackBolt(): Promise<void> {
     let finished = false;
     let lastActivityAt = Date.now();
 
+    // Capture report payload + start Gist creation eagerly when write_report fires
+    let reportPayload: ReportPayload | null = null;
+    let gistPromise: Promise<string | null> | null = null;
+
     // Heartbeat edits the existing placeholder instead of posting new messages
     const heartbeat = setInterval(() => {
       if (finished) return;
@@ -89,8 +96,20 @@ export async function startSlackBolt(): Promise<void> {
 
     await runRootChat({
       sessionId,
-      message: args.message,
+      message: injectSlackContext(args.message, args.kind),
       signal: abortController.signal,
+      onReport: (payload) => {
+        reportPayload = payload;
+        console.log(`[slack:agent] write_report verdict=${payload.verdict} difficulty=${payload.difficulty}`);
+        // Kick off Gist creation eagerly — it resolves before onDone fires
+        gistPromise = createGist(
+          `ShinBuilder report — verdict ${payload.verdict}/5`,
+          renderReportMarkdown(payload)
+        ).catch((e) => {
+          console.warn(`[slack:post] gist creation failed: ${e}`);
+          return null;
+        });
+      },
       onDelta: async (delta) => {
         accumulated += delta;
         lastActivityAt = Date.now();
@@ -120,12 +139,26 @@ export async function startSlackBolt(): Promise<void> {
       },
       onDone: async (reply) => {
         finished = true;
-        console.log(`[slack:agent] done chars=${reply.length} ts=${placeholderTs}`);
-        await args.update(
-          placeholderTs,
-          truncateSlackText(reply),
-          args.kind === "direct" ? undefined : threadTs
-        );
+        // Wait for Gist if it was started
+        const gistUrl = gistPromise ? await gistPromise : null;
+        console.log(`[slack:agent] done chars=${reply.length} gist=${gistUrl ?? "none"} ts=${placeholderTs}`);
+
+        if (reportPayload) {
+          // Upload the first "before" screenshot if available
+          const beforeShot = reportPayload.screenshots.find((s) => s.kind === "before" || s.kind === "gif");
+          if (beforeShot) {
+            await args.uploadFile(beforeShot.path, beforeShot.caption, args.kind === "direct" ? undefined : threadTs);
+          }
+          // Update placeholder with structured score card
+          const card = buildScoreCard(reportPayload, gistUrl);
+          await args.update(placeholderTs, card, args.kind === "direct" ? undefined : threadTs);
+        } else {
+          await args.update(
+            placeholderTs,
+            truncateSlackText(reply),
+            args.kind === "direct" ? undefined : threadTs
+          );
+        }
       },
       onError: async (error) => {
         finished = true;
@@ -179,6 +212,24 @@ export async function startSlackBolt(): Promise<void> {
         });
         if (!resp.ok) console.warn(`[slack:post] chat.update failed ts=${ts} err=${resp.error}`);
       },
+      uploadFile: async (filePath, caption, threadTs) => {
+        try {
+          if (!fs.existsSync(filePath)) return;
+          const base = {
+            channel_id: ev.channel as string,
+            filename: filePath.split("/").pop() ?? "screenshot.png",
+            file: fs.createReadStream(filePath),
+            initial_comment: caption,
+          };
+          if (threadTs) {
+            await client.filesUploadV2({ ...base, thread_ts: threadTs });
+          } else {
+            await client.filesUploadV2(base);
+          }
+        } catch (e) {
+          console.warn(`[slack:post] file upload failed: ${e}`);
+        }
+      },
     });
   });
 
@@ -230,6 +281,24 @@ export async function startSlackBolt(): Promise<void> {
           text,
         });
         if (!resp.ok) console.warn(`[slack:post] chat.update failed ts=${ts} err=${resp.error}`);
+      },
+      uploadFile: async (filePath, caption, threadTs) => {
+        try {
+          if (!fs.existsSync(filePath)) return;
+          const base = {
+            channel_id: ev.channel as string,
+            filename: filePath.split("/").pop() ?? "screenshot.png",
+            file: fs.createReadStream(filePath),
+            initial_comment: caption,
+          };
+          if (threadTs) {
+            await client.filesUploadV2({ ...base, thread_ts: threadTs });
+          } else {
+            await client.filesUploadV2(base);
+          }
+        } catch (e) {
+          console.warn(`[slack:post] file upload failed: ${e}`);
+        }
       },
     });
   });
@@ -326,7 +395,94 @@ function isSlackBotMention(text: string): boolean {
   return /<@[A-Z0-9]+>/.test(text);
 }
 
+function injectSlackContext(message: string, kind: "direct" | "channel"): string {
+  return [
+    `[Context: triggered from Slack ${kind === "direct" ? "DM" : "channel"}.`,
+    `When you finish a repro run, call write_report as normal — the results will be posted back`,
+    `to this Slack thread as a score card (verdict/5, root cause, fix plan) plus a GitHub Gist`,
+    `for the full report. Keep your in-thread text concise (Slack truncates at ~3500 chars).`,
+    `Do NOT post a GitHub comment unless the issue came in with a real GitHub issue URL/number.]`,
+    ``,
+    message,
+  ].join("\n");
+}
+
 function truncateSlackText(text: string, max = 3_500): string {
   if (text.length <= max) return text;
   return `${text.slice(0, max - 40)}\n\n... truncated; see runs dashboard for full output.`;
+}
+
+async function createGist(description: string, content: string): Promise<string> {
+  const resp = await fetch("https://api.github.com/gists", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.github.token}`,
+      "Content-Type": "application/json",
+      "User-Agent": "shin-builder",
+    },
+    body: JSON.stringify({
+      description,
+      public: false,
+      files: { "report.md": { content } },
+    }),
+  });
+  if (!resp.ok) throw new Error(`GitHub Gist API ${resp.status}: ${await resp.text()}`);
+  const data = await resp.json() as { html_url: string };
+  return data.html_url;
+}
+
+const VERDICT_EMOJI: Record<number, string> = {
+  0: "❌",
+  1: "⚠️",
+  2: "🟡",
+  3: "🟠",
+  4: "✅",
+  5: "🏆",
+};
+
+const VERDICT_LABEL: Record<number, string> = {
+  0: "Unreproducible",
+  1: "Setup failed",
+  2: "Partial",
+  3: "Similar symptoms",
+  4: "Reproduced + root cause",
+  5: "Fully validated",
+};
+
+function buildScoreCard(p: ReportPayload, gistUrl: string | null): string {
+  const emoji = VERDICT_EMOJI[p.verdict] ?? "❓";
+  const label = VERDICT_LABEL[p.verdict] ?? "Unknown";
+  const lines: string[] = [];
+
+  lines.push(`${emoji} *${p.verdict}/5 — ${label}* | _${p.difficulty} difficulty_`);
+  lines.push("");
+  lines.push(`> ${p.verdict_reasoning}`);
+
+  if (p.root_cause.length) {
+    lines.push("");
+    lines.push("*Root cause:*");
+    for (const rc of p.root_cause.slice(0, 3)) {
+      lines.push(`• \`${rc.file}:${rc.line}\` — ${rc.explanation}`);
+    }
+  }
+
+  if (p.fix_plan.length) {
+    lines.push("");
+    lines.push("*Fix:*");
+    for (const step of p.fix_plan.slice(0, 3)) {
+      lines.push(`• ${step}`);
+    }
+  }
+
+  if (p.pr_url) {
+    lines.push("");
+    lines.push(`🔀 *Draft PR:* ${p.pr_url}`);
+  }
+
+  if (gistUrl) {
+    lines.push("");
+    lines.push(`📄 *Full report:* ${gistUrl}`);
+  }
+
+  return lines.join("\n");
 }

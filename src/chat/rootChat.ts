@@ -1,5 +1,6 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import { awaitSessionAgent, SessionManager } from "../dashboard/session.js";
+import type { ReportPayload } from "../tools/writeReport.js";
 
 export interface RunRootChatOptions {
   sessionId: string;
@@ -9,6 +10,8 @@ export interface RunRootChatOptions {
   onReproStart?: (replySoFar: string) => void | Promise<void>;
   onDone?: (reply: string, args: { reproStarted: boolean }) => void | Promise<void>;
   onError?: (error: Error) => void | Promise<void>;
+  /** Called when the agent calls write_report — fires before onDone. */
+  onReport?: (payload: ReportPayload) => void | Promise<void>;
 }
 
 /**
@@ -40,6 +43,11 @@ export async function runRootChat(opts: RunRootChatOptions): Promise<void> {
     if (ev["type"] === "tool_call" && ev["name"] === "begin_repro_run" && !reproStarted) {
       reproStarted = true;
       void opts.onReproStart?.(replyAcc);
+    }
+
+    if (ev["type"] === "tool_call" && ev["name"] === "write_report") {
+      const input = ev["input"] as ReportPayload | undefined;
+      if (input) void opts.onReport?.(input);
     }
   });
 
