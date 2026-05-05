@@ -97,6 +97,10 @@ export async function startSlackBolt(): Promise<void> {
     await runRootChat({
       sessionId,
       message: injectSlackContext(args.message, args.kind),
+      // Langfuse trace shows just the raw human message — the wrapped
+      // prompt with thread context is what the agent sees, but it's
+      // noisy in the UI.
+      traceInput: args.message,
       signal: abortController.signal,
       onReport: (payload) => {
         reportPayload = payload;

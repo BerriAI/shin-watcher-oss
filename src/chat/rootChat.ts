@@ -6,6 +6,14 @@ import type { ReportPayload } from "../tools/writeReport.js";
 export interface RunRootChatOptions {
   sessionId: string;
   message: string;
+  /**
+   * Optional override for what gets recorded as the Langfuse trace `input`.
+   * Use this when `message` has been augmented with transport-specific
+   * context (e.g. Slack wraps the user message with thread context and
+   * a "[Context: triggered from Slack...]" preamble) and you want the
+   * trace to show just the raw human text.
+   */
+  traceInput?: string;
   signal?: AbortSignal;
   onDelta?: (delta: string) => void | Promise<void>;
   onReproStart?: (replySoFar: string) => void | Promise<void>;
@@ -64,11 +72,15 @@ export async function runRootChat(opts: RunRootChatOptions): Promise<void> {
     }
   });
 
+  // What the human actually wrote (Slack/etc transports may augment
+  // `message` with extra context before passing it to the agent).
+  const humanInput = opts.traceInput ?? opts.message;
+
   // Resolve the Langfuse sessionId BEFORE creating the trace, in priority order:
   //   1. session.issueId (set on a previous turn — Turn 2+)
   //   2. issue # extracted from this user message ("Reproduce #1234", URL, etc.)
   //   3. opts.sessionId (chat/thread id — covers free-form Turn 1)
-  const detectedFromInput = extractIssueId(opts.message);
+  const detectedFromInput = extractIssueId(humanInput);
   if (detectedFromInput && !session.issueId) {
     session.issueId = detectedFromInput;
   }
@@ -76,7 +88,7 @@ export async function runRootChat(opts: RunRootChatOptions): Promise<void> {
 
   await propagateAttributes({ sessionId: langfuseSessionId }, async () => {
     await startActiveObservation("chat-turn", async (span) => {
-      span.update({ input: opts.message });
+      span.update({ input: humanInput });
 
       try {
         await (agent as unknown as {
