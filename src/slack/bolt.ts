@@ -89,11 +89,11 @@ export async function startSlackBolt(): Promise<void> {
       threadTs
     );
 
-    const sessionFooter = `\n\n_Session: \`${langfuseSessionId}\`_`;
+    const sessionHeader = `_Session: \`${langfuseSessionId}\`_\n\n`;
     const placeholderText =
       args.kind === "direct"
-        ? `:hourglass_flowing_sand: Looking into this now — I'll keep this DM as the session context.${sessionFooter}`
-        : `:hourglass_flowing_sand: Looking into this now — I'll use this Slack thread as the session context.${sessionFooter}`;
+        ? `${sessionHeader}:hourglass_flowing_sand: Looking into this now — I'll keep this DM as the session context.`
+        : `${sessionHeader}:hourglass_flowing_sand: Looking into this now — I'll use this Slack thread as the session context.`;
     const { ts: placeholderTs } = await args.post(
       placeholderText,
       args.kind === "direct" ? undefined : threadTs
@@ -104,13 +104,14 @@ export async function startSlackBolt(): Promise<void> {
 
     /**
      * Edit the placeholder in place AND keep the `_Session: <id>_`
-     * footer pinned so the user can always see/copy the session id no
-     * matter how the body changes (heartbeat, deltas, score card, error).
+     * header pinned at the top so the user can always see/copy the
+     * session id no matter how the body changes (heartbeat, deltas,
+     * score card, error).
      */
-    const updateWithFooter = (text: string): Promise<void> =>
+    const updateWithHeader = (text: string): Promise<void> =>
       args.update(
         placeholderTs,
-        text + sessionFooter,
+        sessionHeader + text,
         args.kind === "direct" ? undefined : threadTs
       );
 
@@ -132,7 +133,7 @@ export async function startSlackBolt(): Promise<void> {
         ? truncateSlackText(accumulated.trim()) + "\n\n_... still working, gathering evidence ..._"
         : "_Still working on this. Running checks and gathering evidence..._";
       console.log(`[slack:post] heartbeat update ts=${placeholderTs}`);
-      void updateWithFooter(heartbeatText);
+      void updateWithHeader(heartbeatText);
     }, 15_000);
     heartbeat.unref();
 
@@ -175,7 +176,7 @@ export async function startSlackBolt(): Promise<void> {
         if (accumulated.trim() && now - lastUpdateAt > 10_000) {
           lastUpdateAt = now;
           console.log(`[slack:agent] delta update chars=${accumulated.length} ts=${placeholderTs}`);
-          await updateWithFooter(
+          await updateWithHeader(
             truncateSlackText(accumulated.trim()) + "\n\n_... thinking ..._"
           );
         }
@@ -186,7 +187,7 @@ export async function startSlackBolt(): Promise<void> {
           truncateSlackText(replySoFar.trim()) ||
           "Starting the repro run now. You can also watch it in the runs dashboard.";
         console.log(`[slack:agent] repro_start chars=${replySoFar.length} ts=${placeholderTs}`);
-        await updateWithFooter(reproText + "\n\n_... repro run started ..._");
+        await updateWithHeader(reproText + "\n\n_... repro run started ..._");
       },
       onDone: async (reply) => {
         finished = true;
@@ -201,16 +202,16 @@ export async function startSlackBolt(): Promise<void> {
             await args.uploadFile(beforeShot.path, beforeShot.caption, args.kind === "direct" ? undefined : threadTs);
           }
           // Update placeholder with structured score card
-          await updateWithFooter(buildScoreCard(reportPayload, gistUrl));
+          await updateWithHeader(buildScoreCard(reportPayload, gistUrl));
         } else {
-          await updateWithFooter(truncateSlackText(reply));
+          await updateWithHeader(truncateSlackText(reply));
         }
       },
       onError: async (error) => {
         finished = true;
         const isAbort = error.name === "AbortError";
         console.log(`[slack:agent] error name=${error.name} msg=${error.message.slice(0, 120)}`);
-        await updateWithFooter(
+        await updateWithHeader(
           isAbort
             ? "This run took too long and timed out. Please resend with a tighter scope (or issue URL), and I'll retry."
             : `Sorry, I hit an error: ${truncateSlackText(error.message, 1_500)}`
