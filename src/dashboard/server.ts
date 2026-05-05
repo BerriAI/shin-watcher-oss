@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import { LiveBus, type LiveEvent } from "./live.js";
 import { SessionManager, awaitSessionAgent } from "./session.js";
+import { sessionDirName, legacySessionDirName } from "./sessionPaths.js";
 import { config } from "../config.js";
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import { Picker } from "../picker.js";
@@ -787,12 +788,11 @@ function injectDashboardFixContext(message: string): string {
 
 /**
  * Read transcript events for one Slack task. The transcript file lives at
- * runs/session-<sessionId.slice(0,12)>/root-transcript.jsonl and is shared
- * across every chat with a sessionId starting with the same 12 chars
- * (e.g. all "slack:channel:..." sessions share one file). We filter by
- * timestamp window between task.createdAt and task.finishedAt (or now)
- * to scope down to this task's events. Concurrent tasks may interleave
- * — the UI shows a notice about that.
+ * runs/session-<safe>-<hash>/root-transcript.jsonl, keyed by the full
+ * sessionId so different Slack threads never collide. For tasks recorded
+ * before that fix landed, we fall back to the legacy slice(0,12) path —
+ * those rows still render, but on a shared file across concurrent threads
+ * (the time-window filter does its best to scope events to this task).
  */
 interface NormalizedEvent {
   ts: number;
@@ -809,13 +809,19 @@ interface NormalizedEvent {
 }
 
 function readTaskEvents(task: SlackTask): NormalizedEvent[] {
-  const sessionDir = `session-${task.sessionId.slice(0, 12)}`;
-  const transcriptPath = path.join(
-    config.paths.runs,
-    sessionDir,
-    "root-transcript.jsonl"
-  );
-  if (!fs.existsSync(transcriptPath)) return [];
+  const candidates = [
+    sessionDirName(task.sessionId),
+    legacySessionDirName(task.sessionId),
+  ];
+  let transcriptPath: string | null = null;
+  for (const dir of candidates) {
+    const p = path.join(config.paths.runs, dir, "root-transcript.jsonl");
+    if (fs.existsSync(p)) {
+      transcriptPath = p;
+      break;
+    }
+  }
+  if (!transcriptPath) return [];
 
   const startMs = new Date(task.createdAt).getTime();
   const endMs = task.finishedAt

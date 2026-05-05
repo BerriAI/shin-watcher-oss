@@ -21,6 +21,7 @@ import { McpBridge } from "../mcp/bridge.js";
 import { githubMcpServer, playwrightMcpServer } from "../mcp/servers.js";
 import { buildRootSystemPrompt } from "../prompts/root.js";
 import { LiveBus } from "./live.js";
+import { sessionDirName } from "./sessionPaths.js";
 import { State } from "../state.js";
 import { feedbackTools } from "self-improving-agent/pi";
 
@@ -114,17 +115,21 @@ class SessionManagerImpl {
     // Mutable reference — updated by tool callbacks without closing over stale session.
     const sessionRef: { obj: RootSession | null } = { obj: null };
 
+    // Per-session dir name. Hash of the full sessionId so different Slack
+    // channel/thread sessions never collide on disk (slice(0,12) used to
+    // collapse every "slack:channel:..." session into one shared dir, and
+    // the dashboard read from that same path — events from concurrent
+    // threads bled into each other's task timelines).
+    const sessionDir = sessionDirName(sessionId);
+
     // Per-session Playwright screenshot dir (shared across repro runs in this session).
-    const screenshotBaseDir = path.join(
-      config.paths.screenshots,
-      `session-${sessionId.slice(0, 12)}`
-    );
+    const screenshotBaseDir = path.join(config.paths.screenshots, sessionDir);
     fs.mkdirSync(screenshotBaseDir, { recursive: true });
 
     // Transcript for this session.
     const transcriptPath = path.join(
       config.paths.runs,
-      `session-${sessionId.slice(0, 12)}`,
+      sessionDir,
       "root-transcript.jsonl"
     );
     fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });

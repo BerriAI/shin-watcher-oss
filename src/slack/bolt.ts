@@ -295,10 +295,25 @@ export async function startSlackBolt(): Promise<void> {
     const text = cleanSlackMentionText(ev.text ?? "");
     if (!text || !ev.channel || !ev.ts) return;
     if (isDuplicate(eventId, ev.channel, ev.ts)) return;
+    // Defensive: when running over HTTP events, Slack also sends an
+    // explicit retry header. Socket Mode strips this, but the field is
+    // free to check.
+    const retryNum = (body as { retry_num?: number; retry_attempt?: number }).retry_num
+      ?? (body as { retry_num?: number; retry_attempt?: number }).retry_attempt;
+    if (typeof retryNum === "number" && retryNum > 0) {
+      console.log(
+        `[slack:dedupe] ignoring slack retry retry_num=${retryNum} channel=${ev.channel} ts=${ev.ts}`
+      );
+      return;
+    }
     await addAckReaction(client, ev.channel, ev.ts);
     const enriched = await enrichMessageFromThread(client, ev, text);
 
-    await runFromEvent({
+    // Fire-and-forget: don't await the entire agent run inside the Bolt
+    // listener. With processBeforeResponse=true the listener body blocks
+    // ack, and Slack times out / retries after ~3s. The retries inflate
+    // attempts and waste compute even though our DB dedupe catches them.
+    runFromEvent({
       source: "app_mention",
       eventId,
       event: ev,
@@ -342,6 +357,8 @@ export async function startSlackBolt(): Promise<void> {
           console.warn(`[slack:post] file upload failed: ${e}`);
         }
       },
+    }).catch((err) => {
+      console.error(`[slack:event] runFromEvent (app_mention) failed:`, err);
     });
   });
 
@@ -362,10 +379,19 @@ export async function startSlackBolt(): Promise<void> {
     }
     if (!kind || !message) return;
     if (isDuplicate(eventId, ev.channel, ev.ts)) return;
+    const retryNum = (body as { retry_num?: number; retry_attempt?: number }).retry_num
+      ?? (body as { retry_num?: number; retry_attempt?: number }).retry_attempt;
+    if (typeof retryNum === "number" && retryNum > 0) {
+      console.log(
+        `[slack:dedupe] ignoring slack retry retry_num=${retryNum} channel=${ev.channel} ts=${ev.ts}`
+      );
+      return;
+    }
     await addAckReaction(client, ev.channel, ev.ts);
     const enriched = message;
 
-    await runFromEvent({
+    // Fire-and-forget — see comment in app_mention handler above.
+    runFromEvent({
       source: "message",
       eventId,
       event: ev,
@@ -409,6 +435,8 @@ export async function startSlackBolt(): Promise<void> {
           console.warn(`[slack:post] file upload failed: ${e}`);
         }
       },
+    }).catch((err) => {
+      console.error(`[slack:event] runFromEvent (message) failed:`, err);
     });
   });
 
