@@ -107,7 +107,7 @@ export async function startSlackBolt(): Promise<void> {
     // Persist the incoming task BEFORE any async work begins. If the
     // process dies between now and onDone, the row stays 'running' and is
     // surfaced on the next boot via recoverOrphanedSlackTasks.
-    const taskId = state.recordSlackTask({
+    const task = state.recordSlackTask({
       channel: event.channel ?? "unknown",
       threadTs,
       messageTs: event.ts ?? String(Date.now() / 1000),
@@ -117,6 +117,13 @@ export async function startSlackBolt(): Promise<void> {
       sessionId,
       langfuseSessionId,
     });
+    if (!task.isNew) {
+      console.log(
+        `[slack:dedupe] duplicate delivery ignored channel=${event.channel ?? "unknown"} ts=${event.ts ?? "unknown"} taskId=${task.id}`
+      );
+      return;
+    }
+    const taskId = task.id;
 
     const sessionHeader = `_Session: \`${langfuseSessionId}\`_\n\n`;
     const placeholderText =

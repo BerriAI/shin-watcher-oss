@@ -234,9 +234,9 @@ export class State {
   // crashed, please resend" notice on the next boot.
 
   /**
-   * Idempotent insert: returns the existing row id if (channel, messageTs)
-   * already exists. This is the durability hook that fires on every
-   * Slack event before any agent work begins.
+   * Idempotent insert. Returns { id, isNew } where isNew=false means this
+   * Slack message (channel + messageTs) was already recorded previously.
+   * Callers should no-op when isNew=false to avoid duplicate processing.
    */
   recordSlackTask(t: {
     channel: string;
@@ -247,12 +247,12 @@ export class State {
     enrichedMessage: string;
     sessionId: string;
     langfuseSessionId: string;
-  }): number {
+  }): { id: number; isNew: boolean } {
     const now = new Date().toISOString();
     const existing = this.db
       .prepare(`SELECT id FROM slack_tasks WHERE channel = ? AND message_ts = ?`)
       .get(t.channel, t.messageTs) as { id: number } | undefined;
-    if (existing) return existing.id;
+    if (existing) return { id: existing.id, isNew: false };
     const result = this.db
       .prepare(
         `INSERT INTO slack_tasks
@@ -263,7 +263,7 @@ export class State {
            @sessionId, @langfuseSessionId, 'pending', @now, @now)`
       )
       .run({ ...t, now });
-    return result.lastInsertRowid as number;
+    return { id: result.lastInsertRowid as number, isNew: true };
   }
 
   markSlackTaskRunning(id: number, placeholderTs: string | null): void {
