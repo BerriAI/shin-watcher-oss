@@ -1,8 +1,31 @@
 import { App } from "@slack/bolt";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import { config } from "../config.js";
 import { runRootChat } from "../chat/rootChat.js";
 import { type ReportPayload, renderReportMarkdown } from "../tools/writeReport.js";
+
+/**
+ * Deterministic Langfuse session id for a Slack conversation.
+ *
+ * Hashing `${channel}:${threadTs}` gives us:
+ *   • the SAME id for every reply in a thread (so all turns land in one
+ *     Langfuse session without any persistence on our side),
+ *   • a fresh id when the user starts a new top-level message,
+ *   • a stable, copy-pasteable, human-readable handle the user can drop
+ *     into Langfuse search.
+ *
+ * Format: `chat-<8 hex chars>` — short enough to fit nicely in a Slack
+ * placeholder, long enough to be unique in practice.
+ */
+function deriveLangfuseSessionId(channelId: string, threadTs: string): string {
+  const hash = crypto
+    .createHash("sha256")
+    .update(`${channelId}:${threadTs}`)
+    .digest("hex")
+    .slice(0, 8);
+  return `chat-${hash}`;
+}
 
 type SlackEventCommon = {
   text?: string;
@@ -57,16 +80,39 @@ export async function startSlackBolt(): Promise<void> {
         ? `slack:direct:${teamId}:${event.channel ?? "unknown"}:${event.user ?? "unknown"}`
         : `slack:channel:${teamId}:${event.channel ?? "unknown"}:thread:${threadTs}`;
 
-    // Post a single placeholder message — all updates edit this in place
+    // Mint a deterministic Langfuse session id for this conversation —
+    // same hash for every reply in the thread, fresh hash for new top-
+    // level messages. Set BEFORE we post the placeholder so the user
+    // sees the id they can use to look the trace up in Langfuse.
+    const langfuseSessionId = deriveLangfuseSessionId(
+      event.channel ?? "unknown",
+      threadTs
+    );
+
+    const sessionFooter = `\n\n_Session: \`${langfuseSessionId}\`_`;
     const placeholderText =
       args.kind === "direct"
-        ? "I'm looking into this now. I'll keep this DM as the session context."
-        : "I'm looking into this now. I'll use this Slack thread as the session context.";
+        ? `:hourglass_flowing_sand: Looking into this now — I'll keep this DM as the session context.${sessionFooter}`
+        : `:hourglass_flowing_sand: Looking into this now — I'll use this Slack thread as the session context.${sessionFooter}`;
     const { ts: placeholderTs } = await args.post(
       placeholderText,
       args.kind === "direct" ? undefined : threadTs
     );
-    console.log(`[slack:post] placeholder ts=${placeholderTs} session=${sessionId}`);
+    console.log(
+      `[slack:post] placeholder ts=${placeholderTs} session=${sessionId} langfuse=${langfuseSessionId}`
+    );
+
+    /**
+     * Edit the placeholder in place AND keep the `_Session: <id>_`
+     * footer pinned so the user can always see/copy the session id no
+     * matter how the body changes (heartbeat, deltas, score card, error).
+     */
+    const updateWithFooter = (text: string): Promise<void> =>
+      args.update(
+        placeholderTs,
+        text + sessionFooter,
+        args.kind === "direct" ? undefined : threadTs
+      );
 
     let accumulated = "";
     let lastUpdateAt = 0;
@@ -86,7 +132,7 @@ export async function startSlackBolt(): Promise<void> {
         ? truncateSlackText(accumulated.trim()) + "\n\n_... still working, gathering evidence ..._"
         : "_Still working on this. Running checks and gathering evidence..._";
       console.log(`[slack:post] heartbeat update ts=${placeholderTs}`);
-      void args.update(placeholderTs, heartbeatText, args.kind === "direct" ? undefined : threadTs);
+      void updateWithFooter(heartbeatText);
     }, 15_000);
     heartbeat.unref();
 
@@ -104,6 +150,10 @@ export async function startSlackBolt(): Promise<void> {
       // prompt with thread context is what the agent sees, but it's
       // noisy in the UI.
       traceInput: args.rawMessage,
+      // Use the deterministic Slack-minted session id so every turn of
+      // this thread groups together in Langfuse, regardless of what
+      // the agent writes.
+      langfuseSessionId,
       signal: abortController.signal,
       onReport: (payload) => {
         reportPayload = payload;
@@ -125,10 +175,8 @@ export async function startSlackBolt(): Promise<void> {
         if (accumulated.trim() && now - lastUpdateAt > 10_000) {
           lastUpdateAt = now;
           console.log(`[slack:agent] delta update chars=${accumulated.length} ts=${placeholderTs}`);
-          await args.update(
-            placeholderTs,
-            truncateSlackText(accumulated.trim()) + "\n\n_... thinking ..._",
-            args.kind === "direct" ? undefined : threadTs
+          await updateWithFooter(
+            truncateSlackText(accumulated.trim()) + "\n\n_... thinking ..._"
           );
         }
       },
@@ -138,11 +186,7 @@ export async function startSlackBolt(): Promise<void> {
           truncateSlackText(replySoFar.trim()) ||
           "Starting the repro run now. You can also watch it in the runs dashboard.";
         console.log(`[slack:agent] repro_start chars=${replySoFar.length} ts=${placeholderTs}`);
-        await args.update(
-          placeholderTs,
-          reproText + "\n\n_... repro run started ..._",
-          args.kind === "direct" ? undefined : threadTs
-        );
+        await updateWithFooter(reproText + "\n\n_... repro run started ..._");
       },
       onDone: async (reply) => {
         finished = true;
@@ -157,26 +201,19 @@ export async function startSlackBolt(): Promise<void> {
             await args.uploadFile(beforeShot.path, beforeShot.caption, args.kind === "direct" ? undefined : threadTs);
           }
           // Update placeholder with structured score card
-          const card = buildScoreCard(reportPayload, gistUrl);
-          await args.update(placeholderTs, card, args.kind === "direct" ? undefined : threadTs);
+          await updateWithFooter(buildScoreCard(reportPayload, gistUrl));
         } else {
-          await args.update(
-            placeholderTs,
-            truncateSlackText(reply),
-            args.kind === "direct" ? undefined : threadTs
-          );
+          await updateWithFooter(truncateSlackText(reply));
         }
       },
       onError: async (error) => {
         finished = true;
         const isAbort = error.name === "AbortError";
         console.log(`[slack:agent] error name=${error.name} msg=${error.message.slice(0, 120)}`);
-        await args.update(
-          placeholderTs,
+        await updateWithFooter(
           isAbort
             ? "This run took too long and timed out. Please resend with a tighter scope (or issue URL), and I'll retry."
-            : `Sorry, I hit an error: ${truncateSlackText(error.message, 1_500)}`,
-          args.kind === "direct" ? undefined : threadTs
+            : `Sorry, I hit an error: ${truncateSlackText(error.message, 1_500)}`
         );
       },
     });

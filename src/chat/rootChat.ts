@@ -1,4 +1,5 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
+import { LangfuseOtelSpanAttributes } from "@langfuse/core";
 import { propagateAttributes, startActiveObservation } from "@langfuse/tracing";
 import { awaitSessionAgent, SessionManager } from "../dashboard/session.js";
 import type { ReportPayload } from "../tools/writeReport.js";
@@ -14,6 +15,14 @@ export interface RunRootChatOptions {
    * trace to show just the raw human text.
    */
   traceInput?: string;
+  /**
+   * Explicit Langfuse session id supplied by the transport (e.g. Slack
+   * mints one per thread, deterministic from `channel:threadTs`). When
+   * provided this takes priority over every other heuristic and disables
+   * late detection from the agent's reply — Slack/web transports control
+   * grouping themselves rather than relying on the agent declaring it.
+   */
+  langfuseSessionId?: string;
   signal?: AbortSignal;
   onDelta?: (delta: string) => void | Promise<void>;
   onReproStart?: (replySoFar: string) => void | Promise<void>;
@@ -29,13 +38,16 @@ export interface RunRootChatOptions {
  * duplicating SessionManager/Agent event wiring.
  *
  * Each turn is wrapped in a single Langfuse trace named `chat-turn`:
- *   input    = the human message
+ *   input    = the human message (raw, via traceInput when transports wrap it)
  *   output   = the agent's accumulated text reply
- *   sessionId = the issue identifier — extracted eagerly from the user's
- *               message ("Reproduce #1234", a GitHub issue URL, etc.) or
- *               from the agent's "This is issue #XXX" Turn-1 declaration
- *               (per BerriAI/shin-watcher-oss#2). Falls back to the chat
- *               session id when no issue identifier is present.
+ *   sessionId = a stable id derived from:
+ *               1. session.issueId (already set on a previous turn)
+ *               2. the user's message (issue # / GitHub URL)
+ *               3. the agent's "Session: <id>" Turn-1 declaration —
+ *                  applied LATE via a direct OTEL `session.id` attribute
+ *                  on the active span so Turn 1 itself lands in the right
+ *                  Langfuse session even for free-form (non-issue) chats.
+ *               4. opts.sessionId fallback (Slack thread id, etc.)
  *
  * No nested LLM/tool spans are created — the user only wants to see the
  * human side and the agent side at the trace level.
@@ -72,22 +84,30 @@ export async function runRootChat(opts: RunRootChatOptions): Promise<void> {
     }
   });
 
-  // What the human actually wrote (Slack/etc transports may augment
-  // `message` with extra context before passing it to the agent).
   const humanInput = opts.traceInput ?? opts.message;
 
-  // Resolve the Langfuse sessionId BEFORE creating the trace, in priority order:
-  //   1. session.issueId (set on a previous turn — Turn 2+)
-  //   2. issue # extracted from this user message ("Reproduce #1234", URL, etc.)
-  //   3. opts.sessionId (chat/thread id — covers free-form Turn 1)
-  const detectedFromInput = extractIssueId(humanInput);
-  if (detectedFromInput && !session.issueId) {
-    session.issueId = detectedFromInput;
+  // Resolution priority for the Langfuse sessionId:
+  //   1. opts.langfuseSessionId — explicit, transport-supplied (Slack mints
+  //      one per thread). Wins outright; we don't second-guess the caller
+  //      and we skip late detection from the agent's reply.
+  //   2. session.issueId — set on a previous turn of THIS chat, so all
+  //      turns of the conversation share one session.
+  //   3. issue # extracted from this user message (URL, "#1234", etc.).
+  //   4. opts.sessionId — chat/thread id fallback.
+  if (opts.langfuseSessionId) {
+    session.issueId = opts.langfuseSessionId;
+  } else {
+    const eagerFromInput = extractSessionId(humanInput);
+    if (eagerFromInput && !session.issueId) session.issueId = eagerFromInput;
   }
-  const langfuseSessionId = session.issueId ?? opts.sessionId;
+  const provisionalSessionId = session.issueId ?? opts.sessionId;
 
-  await propagateAttributes({ sessionId: langfuseSessionId }, async () => {
+  await propagateAttributes({ sessionId: provisionalSessionId }, async () => {
     await startActiveObservation("chat-turn", async (span) => {
+      span.otelSpan.setAttribute(
+        LangfuseOtelSpanAttributes.TRACE_SESSION_ID,
+        provisionalSessionId
+      );
       span.update({ input: humanInput });
 
       try {
@@ -95,12 +115,18 @@ export async function runRootChat(opts: RunRootChatOptions): Promise<void> {
           prompt: (msg: string, opts?: { signal?: AbortSignal }) => Promise<void>;
         }).prompt(opts.message, opts.signal ? { signal: opts.signal } : undefined);
 
-        // Late-detect from the agent's reply (covers cases where the user
-        // pasted a free-form issue and the issue # only surfaced in the
-        // agent's "This is issue #XXX" declaration on Turn 1).
-        if (!session.issueId) {
-          const detected = extractIssueId(replyAcc);
-          if (detected) session.issueId = detected;
+        // Only attempt late-detection when the transport did NOT supply
+        // an explicit sessionId. Catches issue numbers the agent surfaces
+        // for the first time on Turn 1 of CLI / web SSE chats.
+        if (!opts.langfuseSessionId) {
+          const detectedFromReply = extractSessionId(replyAcc);
+          if (detectedFromReply && detectedFromReply !== session.issueId) {
+            session.issueId = detectedFromReply;
+            span.otelSpan.setAttribute(
+              LangfuseOtelSpanAttributes.TRACE_SESSION_ID,
+              detectedFromReply
+            );
+          }
         }
 
         span.update({ output: replyAcc || "(no reply)" });
@@ -121,17 +147,34 @@ export async function runRootChat(opts: RunRootChatOptions): Promise<void> {
 
 /**
  * Extract a Langfuse-friendly session identifier from a chat message or
- * agent reply. Recognised patterns:
+ * agent reply. Patterns are checked in priority order; first match wins.
  *
- *   "Reproduce #1234"                            → "issue-1234"
- *   "Reproduce issue #1234" / "issue 1234"       → "issue-1234"
+ * PRIMARY (the convention enforced by the root system prompt — every
+ * Turn-1 reply must start with this format):
+ *
+ *   "Session: snowflake-mcp-oauth-redirect-uri"  → "snowflake-mcp-oauth-redirect-uri"
+ *   "Session: issue-26987"                       → "issue-26987"
+ *   "Session: pasted-streaming-timeout"          → "pasted-streaming-timeout"
+ *
+ * LEGACY / from user input (kept as fallbacks so older traces, repro
+ * commands, and bare GitHub URLs still produce a sensible session id):
+ *
  *   "github.com/BerriAI/litellm/issues/1234"     → "issue-1234"
+ *   "Reproduce issue #1234" / "issue 1234"       → "issue-1234"
+ *   "Reproduce #1234"                            → "issue-1234"
  *   "This is issue #1234"                        → "issue-1234"
  *   "This is a pasted issue: <title>"            → "pasted-<slug>"
  *
  * Returns null when no identifier can be extracted.
  */
-function extractIssueId(text: string): string | null {
+function extractSessionId(text: string): string | null {
+  // Primary: explicit "Session: <slug>" line. Anchored to a line start so
+  // we don't accidentally match the word "session" inside prose.
+  const sessionLine = text.match(
+    /(?:^|\n)\s*session:\s*([a-z0-9][a-z0-9-]{1,79}[a-z0-9])\s*(?:\n|$)/i
+  );
+  if (sessionLine) return sessionLine[1]!.toLowerCase();
+
   const urlMatch = text.match(/github\.com\/[^\s\/]+\/[^\s\/]+\/issues\/(\d+)/i);
   if (urlMatch) return `issue-${urlMatch[1]}`;
 
