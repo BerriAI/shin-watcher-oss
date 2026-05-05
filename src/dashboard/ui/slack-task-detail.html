@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>shin-watcher — Slack task</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0d0d0f; --sidebar: #111114; --surface: #18191e; --border: #25262c;
+      --text: #e2e4ec; --muted: #636470; --cyan: #38bdf8; --green: #34d399;
+      --red: #f87171; --yellow: #fbbf24; --purple: #c084fc; --accent: #6366f1;
+      --sans: -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      --mono: ui-monospace, monospace;
+    }
+    html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--sans); }
+
+    .shell { display: flex; height: 100vh; }
+    .sidebar { width: 200px; background: var(--sidebar); border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 12px 0; flex-shrink: 0; }
+    .sidebar-header { padding: 0 12px 12px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .logo { width: 22px; height: 22px; background: var(--accent); border-radius: 6px; display: grid; place-items: center; font-size: 12px; font-weight: 700; color: #fff; flex-shrink: 0; }
+    .logo-label { font-size: 13px; font-weight: 700; }
+    .nav-link { display: flex; align-items: center; gap: 8px; padding: 7px 12px; font-size: 13px; color: var(--muted); text-decoration: none; border-radius: 6px; margin: 1px 6px; }
+    .nav-link:hover { background: rgba(255,255,255,0.04); color: var(--text); }
+    .nav-link.active { background: rgba(99,102,241,0.12); color: var(--text); }
+    .nav-icon { font-size: 14px; width: 18px; text-align: center; }
+
+    .main { flex: 1; overflow-y: auto; padding: 28px 32px; max-width: 1100px; }
+    .back-link { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); text-decoration: none; margin-bottom: 14px; }
+    .back-link:hover { color: var(--accent); }
+    h1 { font-size: 18px; font-weight: 700; margin-bottom: 4px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .subtitle { font-size: 12px; color: var(--muted); margin-bottom: 22px; font-family: var(--mono); }
+
+    .status-chip { font-size: 10px; font-weight: 700; letter-spacing: 0.04em; padding: 3px 8px; border-radius: 5px; text-transform: uppercase; }
+    .chip-running { background: rgba(52,211,153,0.16); color: var(--green); }
+    .chip-pending { background: rgba(251,191,36,0.15); color: var(--yellow); }
+    .chip-done { background: rgba(99,102,241,0.18); color: #a5b4fc; }
+    .chip-failed { background: rgba(248,113,113,0.15); color: var(--red); }
+    .chip-abandoned { background: rgba(120,120,130,0.18); color: var(--muted); }
+
+    .meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px 24px; margin-bottom: 18px; padding: 14px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+    .meta-cell .label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 3px; }
+    .meta-cell .value { font-size: 12px; color: var(--text); font-family: var(--mono); word-break: break-all; }
+
+    .err-row { font-size: 13px; color: var(--red); margin-bottom: 18px; padding: 10px 12px; border-radius: 7px; background: rgba(248,113,113,0.06); border: 1px solid rgba(248,113,113,0.2); word-break: break-word; }
+
+    .section-title { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin: 18px 0 10px; display: flex; align-items: center; justify-content: space-between; }
+    .controls { display: flex; gap: 8px; align-items: center; }
+    .last-updated { font-size: 11px; color: var(--muted); }
+    .btn-refresh { background: rgba(255,255,255,0.06); border: 1px solid var(--border); border-radius: 6px; color: var(--muted); font-size: 11px; padding: 4px 9px; cursor: pointer; }
+    .btn-refresh:hover { color: var(--text); border-color: var(--accent); }
+
+    .notice { font-size: 12px; color: var(--muted); margin-bottom: 12px; padding: 8px 11px; border-radius: 6px; background: rgba(99,102,241,0.05); border: 1px solid rgba(99,102,241,0.15); }
+
+    .timeline { display: flex; flex-direction: column; gap: 8px; }
+    .ev {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+      padding: 10px 12px; display: flex; gap: 10px; align-items: flex-start;
+    }
+    .ev-time { font-family: var(--mono); font-size: 10px; color: var(--muted); white-space: nowrap; padding-top: 2px; min-width: 56px; }
+    .ev-body { flex: 1; min-width: 0; }
+    .ev-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+    .ev-kind { font-size: 10px; font-weight: 700; letter-spacing: 0.04em; padding: 2px 6px; border-radius: 4px; text-transform: uppercase; }
+    .kind-user { background: rgba(56,189,248,0.15); color: var(--cyan); }
+    .kind-assistant { background: rgba(192,132,252,0.15); color: var(--purple); }
+    .kind-tool-call { background: rgba(251,191,36,0.15); color: var(--yellow); }
+    .kind-tool-result { background: rgba(52,211,153,0.15); color: var(--green); }
+    .kind-tool-result.error { background: rgba(248,113,113,0.15); color: var(--red); }
+    .ev-tool-name { font-family: var(--mono); font-size: 11px; color: var(--text); font-weight: 600; }
+    .ev-text { font-size: 13px; line-height: 1.5; color: var(--text); white-space: pre-wrap; word-break: break-word; }
+    .ev-text.muted { color: var(--muted); font-style: italic; }
+    .ev-args, .ev-result {
+      font-family: var(--mono); font-size: 11px; color: var(--muted);
+      background: rgba(0,0,0,0.25); padding: 6px 8px; border-radius: 5px;
+      margin-top: 4px; white-space: pre-wrap; word-break: break-all;
+      max-height: 160px; overflow-y: auto;
+    }
+    .ev-args { color: #d4b878; }
+    .ev-result { color: #92e3b6; }
+    .ev-result.error { color: #fca5a5; }
+
+    .empty { font-size: 13px; color: var(--muted); font-style: italic; padding: 14px 0; text-align: center; }
+
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  </style>
+</head>
+<body>
+<div class="shell">
+  <nav class="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">S</div>
+      <span class="logo-label">shin-watcher</span>
+    </div>
+    <a class="nav-link" href="/"><span class="nav-icon">💬</span> Chat</a>
+    <a class="nav-link" href="/runs"><span class="nav-icon">🔬</span> Runs</a>
+    <a class="nav-link active" href="/slack-tasks"><span class="nav-icon">📨</span> Slack tasks</a>
+  </nav>
+
+  <main class="main" id="main">
+    <a href="/slack-tasks" class="back-link">← All Slack tasks</a>
+    <div id="content"><div class="empty">Loading…</div></div>
+  </main>
+</div>
+
+<script>
+const taskId = parseInt(window.location.pathname.split('/').pop(), 10);
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function relTime(iso) {
+  if (!iso) return '—';
+  const diff = Date.now() - new Date(iso).getTime();
+  const s = Math.floor(diff / 1000);
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s/60)}m ago`;
+  if (s < 86400) return `${Math.floor(s/3600)}h ago`;
+  return `${Math.floor(s/86400)}d ago`;
+}
+function fmtAbs(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleString();
+}
+function fmtTime(ms) {
+  const d = new Date(ms);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+  return `${hh}:${mm}:${ss}`;
+}
+
+function truncate(s, n) {
+  if (!s) return '';
+  s = String(s);
+  return s.length > n ? s.slice(0, n) + ` … [+${s.length - n} chars]` : s;
+}
+
+function renderEvent(ev) {
+  const time = `<div class="ev-time">${fmtTime(ev.ts)}</div>`;
+
+  if (ev.kind === 'user_message') {
+    const text = ev.text || '(empty)';
+    return `
+      <div class="ev">
+        ${time}
+        <div class="ev-body">
+          <div class="ev-head"><span class="ev-kind kind-user">user</span></div>
+          <div class="ev-text">${escapeHtml(text)}</div>
+        </div>
+      </div>
+    `;
+  }
+
+  if (ev.kind === 'assistant_message') {
+    const blocks = ev.blocks || [];
+    const textBlocks = blocks.filter((b) => b.type === 'text' && b.text);
+    const thinkingBlocks = blocks.filter((b) => b.type === 'thinking' && b.thinking);
+    const toolBlocks = blocks.filter((b) => b.type === 'toolCall');
+    const parts = [];
+    for (const b of thinkingBlocks) {
+      parts.push(`<div class="ev-text muted">[thinking] ${escapeHtml(truncate(b.thinking, 600))}</div>`);
+    }
+    for (const b of textBlocks) {
+      parts.push(`<div class="ev-text">${escapeHtml(b.text)}</div>`);
+    }
+    for (const b of toolBlocks) {
+      const argStr = JSON.stringify(b.input ?? {}, null, 2);
+      parts.push(`
+        <div class="ev-text muted">→ tool: <span class="ev-tool-name">${escapeHtml(b.name || '?')}</span></div>
+        <div class="ev-args">${escapeHtml(truncate(argStr, 600))}</div>
+      `);
+    }
+    if (parts.length === 0) parts.push(`<div class="ev-text muted">(no displayable content)</div>`);
+    return `
+      <div class="ev">
+        ${time}
+        <div class="ev-body">
+          <div class="ev-head"><span class="ev-kind kind-assistant">assistant</span></div>
+          ${parts.join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  if (ev.kind === 'tool_call') {
+    const argStr = JSON.stringify(ev.toolArgs ?? {}, null, 2);
+    return `
+      <div class="ev">
+        ${time}
+        <div class="ev-body">
+          <div class="ev-head">
+            <span class="ev-kind kind-tool-call">tool call</span>
+            <span class="ev-tool-name">${escapeHtml(ev.toolName)}</span>
+          </div>
+          <div class="ev-args">${escapeHtml(truncate(argStr, 800))}</div>
+        </div>
+      </div>
+    `;
+  }
+
+  if (ev.kind === 'tool_result') {
+    const isError = !!ev.isError;
+    const result = ev.toolResult || {};
+    const content = Array.isArray(result.content) ? result.content : [];
+    const text = content
+      .map((c) => (c && typeof c.text === 'string' ? c.text : JSON.stringify(c)))
+      .join('\n');
+    const summary = text || JSON.stringify(result);
+    return `
+      <div class="ev">
+        ${time}
+        <div class="ev-body">
+          <div class="ev-head">
+            <span class="ev-kind kind-tool-result ${isError ? 'error' : ''}">tool result${isError ? ' · error' : ''}</span>
+            <span class="ev-tool-name">${escapeHtml(ev.toolName)}</span>
+          </div>
+          <div class="ev-result ${isError ? 'error' : ''}">${escapeHtml(truncate(summary, 1200))}</div>
+        </div>
+      </div>
+    `;
+  }
+
+  return '';
+}
+
+async function load() {
+  try {
+    const res = await fetch(`/api/slack-tasks/${taskId}`);
+    if (res.status === 404) {
+      document.getElementById('content').innerHTML =
+        `<div class="empty">Task #${taskId} not found.</div>`;
+      return;
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const { task, events } = await res.json();
+
+    const statusChip = `<span class="status-chip chip-${task.status}">${task.status}</span>`;
+    const elapsedSec = Math.floor((new Date(task.updatedAt).getTime() - new Date(task.createdAt).getTime()) / 1000);
+
+    const errBlock = task.errorMessage
+      ? `<div class="err-row"><b>Error:</b> ${escapeHtml(task.errorMessage)}</div>`
+      : '';
+
+    const html = `
+      <h1>
+        Task #${task.id}
+        ${statusChip}
+        <span style="font-size:12px;font-weight:400;color:var(--muted)">· ${task.kind}</span>
+      </h1>
+      <p class="subtitle">${escapeHtml(task.langfuseSessionId)} · ${escapeHtml(task.sessionId)}</p>
+
+      <div class="meta-grid">
+        <div class="meta-cell"><div class="label">Created</div><div class="value">${escapeHtml(fmtAbs(task.createdAt))}<br>(${relTime(task.createdAt)})</div></div>
+        <div class="meta-cell"><div class="label">Last activity</div><div class="value">${escapeHtml(fmtAbs(task.updatedAt))}<br>(${relTime(task.updatedAt)})</div></div>
+        <div class="meta-cell"><div class="label">Finished</div><div class="value">${task.finishedAt ? escapeHtml(fmtAbs(task.finishedAt)) + '<br>(' + relTime(task.finishedAt) + ')' : '<span style="color:var(--muted)">— still running —</span>'}</div></div>
+        <div class="meta-cell"><div class="label">Elapsed</div><div class="value">${elapsedSec}s</div></div>
+        <div class="meta-cell"><div class="label">Attempts</div><div class="value">${task.attempts}</div></div>
+        <div class="meta-cell"><div class="label">Slack channel</div><div class="value">${escapeHtml(task.channel)}</div></div>
+        <div class="meta-cell"><div class="label">Thread ts</div><div class="value">${escapeHtml(task.threadTs)}</div></div>
+        <div class="meta-cell"><div class="label">Placeholder ts</div><div class="value">${escapeHtml(task.placeholderTs ?? '—')}</div></div>
+      </div>
+
+      ${errBlock}
+
+      <div class="section-title">
+        <span>Original Slack message</span>
+      </div>
+      <div class="ev">
+        <div class="ev-time">${fmtTime(new Date(task.createdAt).getTime())}</div>
+        <div class="ev-body">
+          <div class="ev-head"><span class="ev-kind kind-user">slack input</span></div>
+          <div class="ev-text">${escapeHtml(task.rawText)}</div>
+        </div>
+      </div>
+
+      <div class="section-title">
+        <span>Conversation timeline (${events.length} events)</span>
+        <div class="controls">
+          <span class="last-updated" id="last-updated"></span>
+          <button class="btn-refresh" onclick="load()">↻ Refresh</button>
+        </div>
+      </div>
+
+      <div class="notice">
+        Events are filtered to this task's time window from the shared session transcript.
+        If multiple Slack tasks ran concurrently, you may see interleaved events.
+      </div>
+
+      <div class="timeline" id="timeline">
+        ${events.length === 0 ? '<div class="empty">No transcript events found in this task\\'s time window.</div>' : events.map(renderEvent).join('')}
+      </div>
+    `;
+    document.getElementById('content').innerHTML = html;
+    const lu = document.getElementById('last-updated');
+    if (lu) lu.textContent = 'Updated ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    document.getElementById('content').innerHTML =
+      `<div class="empty" style="color:var(--red)">Failed to load: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+load();
+setInterval(load, 5000);
+</script>
+</body>
+</html>

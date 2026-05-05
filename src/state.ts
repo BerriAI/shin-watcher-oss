@@ -387,6 +387,15 @@ export class State {
       .all(limit) as SlackTask[];
   }
 
+  getSlackTask(id: number): SlackTask | null {
+    const row = this.db
+      .prepare(
+        `SELECT ${SLACK_TASK_COLUMNS} FROM slack_tasks WHERE id = ?`
+      )
+      .get(id) as SlackTask | undefined;
+    return row ?? null;
+  }
+
   countSlackTasksByStatus(): Record<string, number> {
     const rows = this.db
       .prepare(`SELECT status, COUNT(*) AS n FROM slack_tasks GROUP BY status`)

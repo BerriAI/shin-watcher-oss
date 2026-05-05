@@ -12,6 +12,7 @@ import { Picker } from "../picker.js";
 import { State } from "../state.js";
 import { runRootChat } from "../chat/rootChat.js";
 import { startSlackBolt } from "../slack/bolt.js";
+import type { SlackTask } from "../state.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.join(__dirname, "ui");
@@ -114,6 +115,9 @@ export function startDashboard(port = 3333): void {
   app.get("/slack-tasks", (_req, res) =>
     res.sendFile(path.join(UI_DIR, "slack-tasks.html"))
   );
+  app.get("/slack-tasks/:id", (_req, res) =>
+    res.sendFile(path.join(UI_DIR, "slack-task-detail.html"))
+  );
 
   // ── API: status ────────────────────────────────────────────────────────────
 
@@ -211,6 +215,28 @@ export function startDashboard(port = 3333): void {
   });
 
   // ── API: Slack tasks (durable record of every Slack message) ──────────────
+
+  app.get("/api/slack-tasks/:id", (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "invalid id" });
+      return;
+    }
+    const state = new State(config.paths.stateDb);
+    try {
+      const task = state.getSlackTask(id);
+      if (!task) {
+        res.status(404).json({ error: "task not found" });
+        return;
+      }
+      const events = readTaskEvents(task);
+      res.json({ task, events });
+    } catch (e) {
+      res.status(500).json({ error: String(e) });
+    } finally {
+      state.close();
+    }
+  });
 
   app.get("/api/slack-tasks", (req, res) => {
     try {
@@ -728,4 +754,112 @@ function escapeHtml(s: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+/**
+ * Read transcript events for one Slack task. The transcript file lives at
+ * runs/session-<sessionId.slice(0,12)>/root-transcript.jsonl and is shared
+ * across every chat with a sessionId starting with the same 12 chars
+ * (e.g. all "slack:channel:..." sessions share one file). We filter by
+ * timestamp window between task.createdAt and task.finishedAt (or now)
+ * to scope down to this task's events. Concurrent tasks may interleave
+ * — the UI shows a notice about that.
+ */
+interface NormalizedEvent {
+  ts: number;
+  kind: "user_message" | "assistant_message" | "tool_call" | "tool_result";
+  /** Plain text body for messages, or short summary for tool events. */
+  text?: string;
+  /** For tool events. */
+  toolName?: string;
+  toolArgs?: unknown;
+  toolResult?: unknown;
+  isError?: boolean;
+  /** assistant blocks (text/thinking/toolCall) when present. */
+  blocks?: Array<{ type: string; text?: string; thinking?: string; name?: string; input?: unknown }>;
+}
+
+function readTaskEvents(task: SlackTask): NormalizedEvent[] {
+  const sessionDir = `session-${task.sessionId.slice(0, 12)}`;
+  const transcriptPath = path.join(
+    config.paths.runs,
+    sessionDir,
+    "root-transcript.jsonl"
+  );
+  if (!fs.existsSync(transcriptPath)) return [];
+
+  const startMs = new Date(task.createdAt).getTime();
+  const endMs = task.finishedAt
+    ? new Date(task.finishedAt).getTime() + 30_000
+    : Date.now();
+  const MAX_EVENTS = 500;
+
+  // Stream-read the file line by line. Newest sessions append to the
+  // end so we read the whole thing — typical sizes are well under a
+  // few MB; we cap output rather than input.
+  let raw: string;
+  try {
+    raw = fs.readFileSync(transcriptPath, "utf-8");
+  } catch {
+    return [];
+  }
+  const lines = raw.split("\n");
+  const events: NormalizedEvent[] = [];
+  for (const line of lines) {
+    if (!line) continue;
+    if (events.length >= MAX_EVENTS) break;
+    let ev: Record<string, unknown>;
+    try {
+      ev = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    const ts = Number(ev["ts"] ?? 0);
+    if (!Number.isFinite(ts) || ts < startMs || ts > endMs) continue;
+    const type = String(ev["type"] ?? "");
+
+    if (type === "message_end") {
+      const message = ev["message"] as
+        | { role?: string; content?: unknown }
+        | undefined;
+      if (!message) continue;
+      const role = message.role;
+      const content = Array.isArray(message.content) ? message.content : [];
+      const blocks = content.map((b: Record<string, unknown>) => ({
+        type: String(b["type"] ?? "unknown"),
+        ...(typeof b["text"] === "string" ? { text: b["text"] as string } : {}),
+        ...(typeof b["thinking"] === "string"
+          ? { thinking: b["thinking"] as string }
+          : {}),
+        ...(typeof b["name"] === "string" ? { name: b["name"] as string } : {}),
+        ...(b["input"] !== undefined ? { input: b["input"] } : {}),
+      }));
+      const text = blocks
+        .filter((b) => b.type === "text" && typeof b.text === "string")
+        .map((b) => b.text)
+        .join("\n")
+        .trim();
+      if (role === "user") {
+        events.push({ ts, kind: "user_message", text, blocks });
+      } else if (role === "assistant") {
+        events.push({ ts, kind: "assistant_message", text, blocks });
+      }
+    } else if (type === "tool_execution_start") {
+      events.push({
+        ts,
+        kind: "tool_call",
+        toolName: String(ev["toolName"] ?? "unknown"),
+        toolArgs: ev["args"],
+      });
+    } else if (type === "tool_execution_end") {
+      events.push({
+        ts,
+        kind: "tool_result",
+        toolName: String(ev["toolName"] ?? "unknown"),
+        toolResult: ev["result"],
+        isError: Boolean(ev["isError"]),
+      });
+    }
+  }
+  return events;
 }

@@ -55,7 +55,10 @@
     .task-card {
       background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
       padding: 12px 14px; display: flex; align-items: flex-start; gap: 12px;
+      cursor: pointer; text-decoration: none; color: inherit;
+      transition: border-color 0.12s ease, background 0.12s ease;
     }
+    .task-card:hover { border-color: rgba(99,102,241,0.4); background: rgba(99,102,241,0.04); }
     .status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; margin-top: 5px; }
     .status-running { background: var(--green); animation: p 1.4s ease-in-out infinite; }
     .status-pending { background: var(--yellow); }
@@ -186,7 +189,7 @@ function renderTask(t) {
     : '';
 
   return `
-    <div class="task-card">
+    <a href="/slack-tasks/${t.id}" class="task-card">
       <div class="status-dot status-${status}"></div>
       <div class="task-body">
         <div class="task-row1">
@@ -204,7 +207,7 @@ function renderTask(t) {
         </div>
         ${errBlock}
       </div>
-    </div>
+    </a>
   `;
 }
 
