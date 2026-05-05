@@ -75,6 +75,14 @@ export const config = {
     autoFix: bool("AUTO_FIX", false),
     maxFixPrsPerDay: int("MAX_FIX_PRS_PER_DAY", 5),
   },
+  heartbeat: {
+    // Periodic agent.steer() injection during runRootChat turns. Keeps the
+    // agent moving between assistant turns and ensures every Slack message
+    // closes the loop instead of stalling silently. Set enabled=false to
+    // disable in production if it ever misbehaves.
+    enabled: bool("CHAT_HEARTBEAT_ENABLED", true),
+    intervalSec: int("CHAT_HEARTBEAT_INTERVAL_SEC", 30),
+  },
   paths: {
     workdir: path.resolve(repoRoot, optional("WORKDIR", "./workdir")),
     runs: path.resolve(repoRoot, optional("RUNS_DIR", "./runs")),

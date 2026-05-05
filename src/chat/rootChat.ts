@@ -1,6 +1,7 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import { LangfuseOtelSpanAttributes } from "@langfuse/core";
 import { propagateAttributes, startActiveObservation } from "@langfuse/tracing";
+import { config } from "../config.js";
 import { awaitSessionAgent, SessionManager } from "../dashboard/session.js";
 import type { ReportPayload } from "../tools/writeReport.js";
 
@@ -60,6 +61,9 @@ export async function runRootChat(opts: RunRootChatOptions): Promise<void> {
   let replyAcc = "";
   let reproStarted = false;
   let forwarding = true;
+  // Set when the agent calls write_report so the heartbeat stops nudging
+  // the agent toward its terminal tool after it has already been called.
+  let writeReportFired = false;
 
   agent.subscribe((event: AgentEvent) => {
     if (!forwarding) return;
@@ -79,6 +83,7 @@ export async function runRootChat(opts: RunRootChatOptions): Promise<void> {
     }
 
     if (ev["type"] === "tool_call" && ev["name"] === "write_report") {
+      writeReportFired = true;
       const input = ev["input"] as ReportPayload | undefined;
       if (input) void opts.onReport?.(input);
     }
@@ -110,6 +115,37 @@ export async function runRootChat(opts: RunRootChatOptions): Promise<void> {
       );
       span.update({ input: humanInput });
 
+      // Periodic heartbeat: every CHAT_HEARTBEAT_INTERVAL_SEC seconds we
+      // inject a HEARTBEAT user message into the running agent via
+      // agent.steer(). steer queues the message to land cleanly between
+      // assistant turns so it never interrupts an in-flight tool call or
+      // LLM stream. This keeps the agent moving and ensures every Slack
+      // turn closes the loop instead of stalling silently. The existing
+      // 8-min hardTimeout in src/slack/bolt.ts remains the outer safety
+      // net for the truly-wedged case.
+      let elapsedSec = 0;
+      const heartbeat = config.heartbeat.enabled
+        ? setInterval(() => {
+            if (writeReportFired) return;
+            elapsedSec += config.heartbeat.intervalSec;
+            try {
+              (agent as unknown as {
+                steer: (m: { role: "user"; content: string; timestamp: number }) => void;
+              }).steer({
+                role: "user",
+                content:
+                  `HEARTBEAT (${elapsedSec}s elapsed). Keep making progress on the user's request. ` +
+                  `If you're done or have enough evidence, call write_report now. ` +
+                  `Otherwise emit a one-line public PROGRESS update describing your next action and continue.`,
+                timestamp: Date.now(),
+              });
+            } catch (e) {
+              console.warn(`[chat:heartbeat] steer failed: ${(e as Error).message}`);
+            }
+          }, config.heartbeat.intervalSec * 1000)
+        : null;
+      heartbeat?.unref();
+
       try {
         await (agent as unknown as {
           prompt: (msg: string, opts?: { signal?: AbortSignal }) => Promise<void>;
@@ -139,6 +175,7 @@ export async function runRootChat(opts: RunRootChatOptions): Promise<void> {
         });
         await opts.onError?.(err);
       } finally {
+        if (heartbeat) clearInterval(heartbeat);
         forwarding = false;
       }
     });
