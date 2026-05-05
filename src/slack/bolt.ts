@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import { config } from "../config.js";
 import { runRootChat } from "../chat/rootChat.js";
+import { State, type SlackTask } from "../state.js";
 import { type ReportPayload, renderReportMarkdown } from "../tools/writeReport.js";
 
 /**
@@ -59,6 +60,20 @@ export async function startSlackBolt(): Promise<void> {
     processBeforeResponse: true,
   });
 
+  // Single durable State instance shared by every Slack handler in this
+  // process. WAL mode means concurrent reads/writes are safe.
+  const state = new State(config.paths.stateDb);
+
+  // Boot-time recovery: surface every Slack message that was in flight
+  // when the previous process died, so the user knows we lost it and can
+  // resend. Runs once per startSlackBolt() call.
+  await recoverOrphanedSlackTasks(app, state);
+
+  // Global poller: every 30s, scan the DB for tasks that are 'running'
+  // but whose updated_at hasn't moved in a while. Posts a heartbeat to
+  // Slack so the user always knows we're still alive.
+  startSlackTaskPoller(app, state);
+
   const runFromEvent = async (args: {
     source: "app_mention" | "message";  
     eventId?: string;
@@ -89,6 +104,20 @@ export async function startSlackBolt(): Promise<void> {
       threadTs
     );
 
+    // Persist the incoming task BEFORE any async work begins. If the
+    // process dies between now and onDone, the row stays 'running' and is
+    // surfaced on the next boot via recoverOrphanedSlackTasks.
+    const taskId = state.recordSlackTask({
+      channel: event.channel ?? "unknown",
+      threadTs,
+      messageTs: event.ts ?? String(Date.now() / 1000),
+      kind: args.kind,
+      rawText: args.rawMessage,
+      enrichedMessage: args.message,
+      sessionId,
+      langfuseSessionId,
+    });
+
     const sessionHeader = `_Session: \`${langfuseSessionId}\`_\n\n`;
     const placeholderText =
       args.kind === "direct"
@@ -99,8 +128,12 @@ export async function startSlackBolt(): Promise<void> {
       args.kind === "direct" ? undefined : threadTs
     );
     console.log(
-      `[slack:post] placeholder ts=${placeholderTs} session=${sessionId} langfuse=${langfuseSessionId}`
+      `[slack:post] placeholder ts=${placeholderTs} session=${sessionId} langfuse=${langfuseSessionId} taskId=${taskId}`
     );
+
+    // Flip the row to 'running' and stamp the placeholder so the poller
+    // / recovery path can edit it later.
+    state.markSlackTaskRunning(taskId, placeholderTs);
 
     /**
      * Edit the placeholder in place AND keep the `_Session: <id>_`
@@ -175,6 +208,9 @@ export async function startSlackBolt(): Promise<void> {
         const now = Date.now();
         if (accumulated.trim() && now - lastUpdateAt > 10_000) {
           lastUpdateAt = now;
+          // Bump the DB row's updated_at so the global poller can tell
+          // this task is making real progress vs. genuinely stalled.
+          state.bumpSlackTaskActivity(taskId);
           console.log(`[slack:agent] delta update chars=${accumulated.length} ts=${placeholderTs}`);
           await updateWithHeader(
             truncateSlackText(accumulated.trim()) + "\n\n_... thinking ..._"
@@ -183,6 +219,7 @@ export async function startSlackBolt(): Promise<void> {
       },
       onReproStart: async (replySoFar) => {
         lastActivityAt = Date.now();
+        state.bumpSlackTaskActivity(taskId);
         const reproText =
           truncateSlackText(replySoFar.trim()) ||
           "Starting the repro run now. You can also watch it in the runs dashboard.";
@@ -206,6 +243,7 @@ export async function startSlackBolt(): Promise<void> {
         } else {
           await updateWithHeader(truncateSlackText(reply));
         }
+        state.markSlackTaskDone(taskId);
       },
       onError: async (error) => {
         finished = true;
@@ -216,7 +254,15 @@ export async function startSlackBolt(): Promise<void> {
             ? "This run took too long and timed out. Please resend with a tighter scope (or issue URL), and I'll retry."
             : `Sorry, I hit an error: ${truncateSlackText(error.message, 1_500)}`
         );
+        state.markSlackTaskFailed(taskId, error.message);
       },
+    }).catch((e) => {
+      // Last-resort safety net: if runRootChat itself throws synchronously
+      // and onError doesn't fire, we still need to mark the row so the
+      // poller doesn't think it's stuck forever.
+      const msg = (e as Error).message ?? String(e);
+      console.error(`[slack:agent] runRootChat threw outside onError: ${msg}`);
+      state.markSlackTaskFailed(taskId, `runRootChat threw: ${msg}`);
     });
     finished = true;
     clearInterval(heartbeat);
@@ -353,6 +399,162 @@ export async function startSlackBolt(): Promise<void> {
   await app.start();
   started = true;
   console.log("[slack-bolt] Socket Mode started");
+}
+
+/**
+ * Boot-time recovery: surfaces every Slack message that was in flight
+ * when the previous process died. Posts an honest "I crashed, please
+ * resend" notice to the thread (editing the placeholder in place when
+ * possible) and marks the row 'abandoned'.
+ *
+ * This is the durability guarantee — once a Slack message lands in the
+ * DB, the user is guaranteed to get *some* terminal Slack reply, even
+ * if the original process never lived to write it.
+ */
+async function recoverOrphanedSlackTasks(
+  app: App,
+  state: State
+): Promise<void> {
+  const orphans = state.findOrphanedSlackTasks();
+  if (orphans.length === 0) {
+    console.log("[slack-bolt] no orphaned tasks to recover");
+    return;
+  }
+  console.log(`[slack-bolt] recovering ${orphans.length} orphaned slack task(s)`);
+
+  for (const task of orphans) {
+    const headerLine = `_Session: \`${task.langfuseSessionId}\`_\n\n`;
+    const body =
+      ":boom: *I crashed mid-task and couldn't finish this.* " +
+      "Please resend your message in this thread and I'll retry from scratch.";
+    const text = headerLine + body;
+
+    try {
+      if (task.placeholderTs) {
+        const resp = await app.client.chat.update({
+          channel: task.channel,
+          ts: task.placeholderTs,
+          text,
+        });
+        if (!resp.ok) {
+          console.warn(
+            `[slack-bolt:recover] chat.update failed taskId=${task.id} err=${resp.error}`
+          );
+        }
+      } else {
+        const resp = await app.client.chat.postMessage({
+          channel: task.channel,
+          ...(task.kind === "channel" ? { thread_ts: task.threadTs } : {}),
+          text,
+          unfurl_links: false,
+          unfurl_media: false,
+        });
+        if (!resp.ok) {
+          console.warn(
+            `[slack-bolt:recover] chat.postMessage failed taskId=${task.id} err=${resp.error}`
+          );
+        }
+      }
+      state.markSlackTaskAbandoned(
+        task.id,
+        "process restarted while task was in flight"
+      );
+      console.log(
+        `[slack-bolt:recover] taskId=${task.id} channel=${task.channel} thread=${task.threadTs} marked abandoned`
+      );
+    } catch (e) {
+      console.error(
+        `[slack-bolt:recover] failed for taskId=${task.id}: ${(e as Error).message}`
+      );
+    }
+  }
+}
+
+/**
+ * Global Slack-task poller. Every CHAT_HEARTBEAT_INTERVAL_SEC seconds,
+ * scans the DB for tasks that are 'running' but whose updated_at hasn't
+ * advanced in CHAT_HEARTBEAT_STUCK_AFTER_SEC seconds. Posts a heartbeat
+ * to the thread so the user knows the bot is alive, even if the
+ * per-turn heartbeat in runRootChat hasn't been able to pull the agent
+ * forward.
+ *
+ * This is the belt-and-suspenders complement to recoverOrphanedSlackTasks:
+ * - recoverOrphanedSlackTasks fires once on boot for crashed runs.
+ * - this poller fires continuously for in-flight runs that are slow.
+ */
+function startSlackTaskPoller(app: App, state: State): void {
+  if (!config.heartbeat.enabled) {
+    console.log("[slack-bolt:poller] disabled (CHAT_HEARTBEAT_ENABLED=false)");
+    return;
+  }
+  const intervalMs = config.heartbeat.intervalSec * 1000;
+  const stuckMs = config.heartbeat.stuckAfterSec * 1000;
+  const interval = setInterval(() => {
+    let stuck: SlackTask[] = [];
+    try {
+      stuck = state.findStuckSlackTasks(stuckMs);
+    } catch (e) {
+      console.warn(`[slack-bolt:poller] db read failed: ${(e as Error).message}`);
+      return;
+    }
+    if (stuck.length === 0) return;
+    for (const task of stuck) {
+      void nudgeStuckTask(app, state, task);
+    }
+  }, intervalMs);
+  interval.unref();
+  console.log(
+    `[slack-bolt:poller] started: tick=${config.heartbeat.intervalSec}s stuck-after=${config.heartbeat.stuckAfterSec}s`
+  );
+}
+
+async function nudgeStuckTask(
+  app: App,
+  state: State,
+  task: SlackTask
+): Promise<void> {
+  const idleSec = Math.round(
+    (Date.now() - new Date(task.updatedAt).getTime()) / 1000
+  );
+  const headerLine = `_Session: \`${task.langfuseSessionId}\`_\n\n`;
+  const body =
+    `:hourglass_flowing_sand: *Still working* — no agent activity for ${idleSec}s. ` +
+    "The watchdog will keep checking and will mark this run failed if it stays stuck.";
+  const text = headerLine + body;
+
+  try {
+    if (task.placeholderTs) {
+      const resp = await app.client.chat.update({
+        channel: task.channel,
+        ts: task.placeholderTs,
+        text,
+      });
+      if (!resp.ok) {
+        console.warn(
+          `[slack-bolt:poller] chat.update failed taskId=${task.id} err=${resp.error}`
+        );
+      }
+    } else {
+      const resp = await app.client.chat.postMessage({
+        channel: task.channel,
+        ...(task.kind === "channel" ? { thread_ts: task.threadTs } : {}),
+        text,
+      });
+      if (!resp.ok) {
+        console.warn(
+          `[slack-bolt:poller] chat.postMessage failed taskId=${task.id} err=${resp.error}`
+        );
+      }
+    }
+    state.markSlackTaskNudged(task.id);
+    console.log(
+      `[slack-bolt:poller] nudged taskId=${task.id} idle=${idleSec}s`
+    );
+  } catch (e) {
+    console.warn(
+      `[slack-bolt:poller] nudge failed taskId=${task.id}: ${(e as Error).message}`
+    );
+  }
 }
 
 async function enrichMessageFromThread(

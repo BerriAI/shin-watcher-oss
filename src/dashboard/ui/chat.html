@@ -152,9 +152,14 @@
       <button type="button" class="btn-stop-head" id="btn-stop-all" title="Stop all repro agents">■</button>
     </div>
     <div class="sessions" id="sessions"></div>
-    <a href="/runs" style="display:flex;align-items:center;gap:7px;padding:9px 12px;margin:4px 6px;font-size:12px;color:var(--muted);text-decoration:none;border-radius:6px;border-top:1px solid var(--border);margin-top:auto" onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--muted)'">
-      <span style="font-size:13px">🔬</span> View runs
-    </a>
+    <div style="margin-top:auto;border-top:1px solid var(--border)">
+      <a href="/runs" style="display:flex;align-items:center;gap:7px;padding:9px 12px;margin:4px 6px;font-size:12px;color:var(--muted);text-decoration:none;border-radius:6px" onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--muted)'">
+        <span style="font-size:13px">🔬</span> View runs
+      </a>
+      <a href="/slack-tasks" style="display:flex;align-items:center;gap:7px;padding:9px 12px;margin:4px 6px;font-size:12px;color:var(--muted);text-decoration:none;border-radius:6px" onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--muted)'">
+        <span style="font-size:13px">📨</span> Slack tasks
+      </a>
+    </div>
   </aside>
 
   <main class="main">

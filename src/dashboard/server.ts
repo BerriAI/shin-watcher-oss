@@ -111,6 +111,9 @@ export function startDashboard(port = 3333): void {
 
   app.get("/", (_req, res) => res.sendFile(path.join(UI_DIR, "chat.html")));
   app.get("/runs", (_req, res) => res.sendFile(path.join(UI_DIR, "runs.html")));
+  app.get("/slack-tasks", (_req, res) =>
+    res.sendFile(path.join(UI_DIR, "slack-tasks.html"))
+  );
 
   // ── API: status ────────────────────────────────────────────────────────────
 
@@ -205,6 +208,44 @@ export function startDashboard(port = 3333): void {
       }
     });
     res.json({ ok: true, sessionId });
+  });
+
+  // ── API: Slack tasks (durable record of every Slack message) ──────────────
+
+  app.get("/api/slack-tasks", (req, res) => {
+    try {
+      const state = new State(config.paths.stateDb);
+      const statusParam = String(req.query["status"] ?? "all").toLowerCase();
+      const limit = Math.min(
+        Math.max(parseInt(String(req.query["limit"] ?? "100"), 10) || 100, 1),
+        500
+      );
+      const allowed = new Set([
+        "pending",
+        "running",
+        "done",
+        "failed",
+        "abandoned",
+      ]);
+      const statuses =
+        statusParam === "all"
+          ? undefined
+          : statusParam
+              .split(",")
+              .map((s) => s.trim())
+              .filter((s) => allowed.has(s));
+      const tasks = state.recentSlackTasks({
+        statuses: statuses as Array<
+          "pending" | "running" | "done" | "failed" | "abandoned"
+        > | undefined,
+        limit,
+      });
+      const counts = state.countSlackTasksByStatus();
+      state.close();
+      res.json({ counts, tasks });
+    } catch (e) {
+      res.status(500).json({ error: String(e) });
+    }
   });
 
   // ── API: recent history ────────────────────────────────────────────────────

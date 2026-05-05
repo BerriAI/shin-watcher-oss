@@ -76,12 +76,18 @@ export const config = {
     maxFixPrsPerDay: int("MAX_FIX_PRS_PER_DAY", 5),
   },
   heartbeat: {
-    // Periodic agent.steer() injection during runRootChat turns. Keeps the
-    // agent moving between assistant turns and ensures every Slack message
-    // closes the loop instead of stalling silently. Set enabled=false to
-    // disable in production if it ever misbehaves.
+    // Periodic agent.steer() injection during runRootChat turns AND a
+    // global Slack-task poller that scans the DB for in-flight tasks
+    // whose updated_at hasn't moved in stuckAfterSec. Together with
+    // boot-time recovery in src/slack/bolt.ts, these guarantee that
+    // every Slack message closes the loop with a real reply.
+    // Set enabled=false to disable both in production if they misbehave.
     enabled: bool("CHAT_HEARTBEAT_ENABLED", true),
     intervalSec: int("CHAT_HEARTBEAT_INTERVAL_SEC", 30),
+    // A 'running' Slack task whose updated_at hasn't advanced for at
+    // least this long is considered stuck — the global poller posts a
+    // heartbeat to its thread so the user knows we're still alive.
+    stuckAfterSec: int("CHAT_HEARTBEAT_STUCK_AFTER_SEC", 120),
   },
   paths: {
     workdir: path.resolve(repoRoot, optional("WORKDIR", "./workdir")),
