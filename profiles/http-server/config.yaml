@@ -1,0 +1,27 @@
+# Profile: http-server
+#
+# Demonstrates the profile system on a Node.js HTTP server (http-party/http-server)
+# instead of the default litellm proxy. Used to validate that shin-watcher's
+# generic profile mechanism actually works on a stack different from BerriAI/litellm.
+#
+# Placeholders interpolated at runtime per repro run:
+#   {port}          allocated proxy port
+#   {master_key}    generated master key (unused here, http-server has no admin auth)
+#   {ui_username}   generated UI username (unused)
+#   {ui_password}   generated UI password (unused)
+
+name: http-server
+
+clone_url: https://github.com/http-party/http-server.git
+default_ref: master
+
+install:
+  command: npm install --no-audit --no-fund
+
+start:
+  command: node ./bin/http-server -p {port} -d false -i
+  env: {}
+
+health_check:
+  url: http://localhost:{port}/
+  timeout_ms: 30000
