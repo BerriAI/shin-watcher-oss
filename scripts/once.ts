@@ -13,6 +13,7 @@
 // before anything else can reach LLM-using code.
 import "../src/observability/instrumentation.js";
 
+import { config } from "../src/config.js";
 import { startDashboard } from "../src/dashboard/server.js";
 import { SessionManager, awaitSessionAgent } from "../src/dashboard/session.js";
 
@@ -32,9 +33,10 @@ async function main(): Promise<void> {
   startDashboard(3333);
 
   if (issueNumber !== undefined || runNext) {
+    const target = `${config.github.targetOwner}/${config.github.targetRepo}`;
     const msg = issueNumber
-      ? `Reproduce issue #${issueNumber} on BerriAI/litellm.`
-      : "Pick the next eligible open bug on BerriAI/litellm and reproduce it.";
+      ? `Reproduce issue #${issueNumber} on ${target}.`
+      : `Pick the next eligible open bug on ${target} and reproduce it.`;
 
     const session = SessionManager.getOrCreate("cli-once");
     const agent = await awaitSessionAgent(session, 90_000).catch((e) => {
