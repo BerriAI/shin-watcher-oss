@@ -18,7 +18,7 @@ PR proof must be from a running LiteLLM proxy end-to-end flow, not static/local 
 
 ```bash
 curl -sf http://localhost:4000/health/readiness && echo "already up" || {
-  export LITELLM_MASTER_KEY=sk-1234
+  export LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-sk-$(openssl rand -hex 16)}"
   export UI_USERNAME=admin
   export UI_PASSWORD=admin123
   export DATABASE_URL=$LITELLM_SANDBOX_DB_URL

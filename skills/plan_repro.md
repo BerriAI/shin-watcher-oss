@@ -16,7 +16,7 @@ Then hand off clear instructions for fixing.
 
 ```bash
 curl -sf http://localhost:4000/health/readiness && echo "already up" || {
-  export LITELLM_MASTER_KEY=sk-1234
+  export LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-sk-$(openssl rand -hex 16)}"
   export UI_USERNAME=admin
   export UI_PASSWORD=admin123
   export DATABASE_URL=$LITELLM_SANDBOX_DB_URL
@@ -60,6 +60,7 @@ ADMIN_TOKEN=$(grep 'token' /tmp/admin_cookies.txt | awk '{print $NF}')
 **Internal user token** — mint a JWT directly (the `/login` endpoint is admin-only):
 ```bash
 USER_TOKEN=$(python3 -c "
+import os
 import jwt, json
 payload = {
     'user_id': '$USER_ID',
@@ -72,10 +73,11 @@ payload = {
     'disabled_non_admin_personal_key_creation': False,
     'server_root_path': ''
 }
-print(jwt.encode(payload, 'sk-1234', algorithm='HS256'))
+print(jwt.encode(payload, os.environ['LITELLM_MASTER_KEY'], algorithm='HS256'))
 " 2>/dev/null || python3 -c "
+import os
 import hmac, hashlib, base64, json
-secret = b'sk-1234'
+secret = os.environ['LITELLM_MASTER_KEY'].encode()
 header = base64.urlsafe_b64encode(b'{\"alg\":\"HS256\",\"typ\":\"JWT\"}').rstrip(b'=').decode()
 payload_data = {'user_id':'$USER_ID','key':'$USER_KEY','user_role':'internal_user','login_method':'username_password','premium_user':False,'auth_header_name':'Authorization','disabled_non_admin_personal_key_creation':False,'server_root_path':''}
 payload = base64.urlsafe_b64encode(json.dumps(payload_data).encode()).rstrip(b'=').decode()
