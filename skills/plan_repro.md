@@ -15,8 +15,10 @@ Then hand off clear instructions for fixing.
 ## Step 1 — Start the proxy (if not already running)
 
 ```bash
+KEY_FILE=/tmp/litellm_qa_master_key
+[ -s "$KEY_FILE" ] || (umask 077 && printf 'sk-%s' "$(openssl rand -hex 16)" > "$KEY_FILE")
+export LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-$(cat "$KEY_FILE")}"
 curl -sf http://localhost:4000/health/readiness && echo "already up" || {
-  export LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-sk-$(openssl rand -hex 16)}"
   export UI_USERNAME=admin
   export UI_PASSWORD=admin123
   export DATABASE_URL=$LITELLM_SANDBOX_DB_URL
@@ -59,6 +61,9 @@ ADMIN_TOKEN=$(grep 'token' /tmp/admin_cookies.txt | awk '{print $NF}')
 
 **Internal user token** — mint a JWT directly (the `/login` endpoint is admin-only):
 ```bash
+KEY_FILE=/tmp/litellm_qa_master_key
+[ -s "$KEY_FILE" ] || (umask 077 && printf 'sk-%s' "$(openssl rand -hex 16)" > "$KEY_FILE")
+export LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-$(cat "$KEY_FILE")}"
 USER_TOKEN=$(python3 -c "
 import os
 import jwt, json
