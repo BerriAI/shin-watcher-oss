@@ -53,7 +53,10 @@ Determine which applies from the plan context and instruct the QA Agent accordin
 > MAIN_REPO=/Users/ishaanjaffer/github/litellm
 > pkill -f "litellm.*4000" 2>/dev/null; lsof -ti :4000 | xargs kill -9 2>/dev/null || true; sleep 2
 > $VENV/bin/pip install -e "$MAIN_REPO" --no-deps -q 2>&1 | tail -3
-> export LITELLM_MASTER_KEY=sk-1234 UI_USERNAME=admin UI_PASSWORD=admin123 DATABASE_URL=$LITELLM_SANDBOX_DB_URL
+> KEY_FILE=/tmp/litellm_qa_master_key
+> [ -s "$KEY_FILE" ] || (umask 077 && printf 'sk-%s' "$(openssl rand -hex 16)" > "$KEY_FILE")
+> export LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-$(cat "$KEY_FILE")}"
+> export UI_USERNAME=admin UI_PASSWORD=admin123 DATABASE_URL=$LITELLM_SANDBOX_DB_URL
 > nohup $VENV/bin/litellm --config "$MAIN_REPO/proxy_server_config.yaml" --port 4000 > /tmp/proxy_before.log 2>&1 &
 > for i in $(seq 1 30); do curl -sf http://localhost:4000/health/readiness && echo "proxy up" && break || sleep 2; done
 > ```
@@ -111,7 +114,9 @@ Determine which applies from the plan context and instruct the QA Agent accordin
 > ### Step 5 — Start a fresh proxy with the fix
 >
 > ```bash
-> export LITELLM_MASTER_KEY=sk-1234
+> KEY_FILE=/tmp/litellm_qa_master_key
+> [ -s "$KEY_FILE" ] || (umask 077 && printf 'sk-%s' "$(openssl rand -hex 16)" > "$KEY_FILE")
+> export LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-$(cat "$KEY_FILE")}"
 > export UI_USERNAME=admin
 > export UI_PASSWORD=admin123
 > export DATABASE_URL=$LITELLM_SANDBOX_DB_URL
@@ -192,13 +197,17 @@ Determine which applies from the plan context and instruct the QA Agent accordin
 > ADMIN_TOKEN=$(grep 'token' /tmp/qa_cookies.txt | awk '{print $NF}')
 >
 > # Internal user token — mint JWT directly:
+> KEY_FILE=/tmp/litellm_qa_master_key
+> [ -s "$KEY_FILE" ] || (umask 077 && printf 'sk-%s' "$(openssl rand -hex 16)" > "$KEY_FILE")
+> export LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-$(cat "$KEY_FILE")}"
 > USER_TOKEN=$(python3 -c "
+> import os
 > import jwt
 > payload = {'user_id': '$USER_ID', 'key': '$USER_KEY', 'user_role': 'internal_user',
 >            'login_method': 'username_password', 'premium_user': False,
 >            'auth_header_name': 'Authorization',
 >            'disabled_non_admin_personal_key_creation': False, 'server_root_path': ''}
-> print(jwt.encode(payload, 'sk-1234', algorithm='HS256'))
+> print(jwt.encode(payload, os.environ['LITELLM_MASTER_KEY'], algorithm='HS256'))
 > ")
 > ```
 >
