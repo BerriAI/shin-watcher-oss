@@ -21,7 +21,7 @@
     "@langfuse/tracing": "^5.3.0",
     "@mariozechner/pi-agent-core": "^0.71.1",
     "@mariozechner/pi-ai": "^0.71.1",
-    "@modelcontextprotocol/sdk": "^1.0.4",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@octokit/rest": "^21.0.2",
     "@opentelemetry/sdk-node": "^0.216.0",
     "@slack/bolt": "^4.7.2",
